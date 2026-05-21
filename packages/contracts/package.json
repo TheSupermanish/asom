@@ -1,0 +1,13 @@
+{
+  "name": "@asom/contracts",
+  "version": "0.0.1",
+  "private": true,
+  "description": "asom on-chain contracts (Foundry)",
+  "scripts": {
+    "build": "forge build",
+    "test": "forge test -vvv",
+    "fmt": "forge fmt",
+    "deploy:oracle:shannon": "forge script script/DeployOracleAgent.s.sol:DeployOracleAgent --rpc-url shannon --broadcast --slow",
+    "request:btc:shannon": "forge script script/RequestBtcPrice.s.sol:RequestBtcPrice --rpc-url shannon --broadcast --slow"
+  }
+}
