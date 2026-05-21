@@ -1,0 +1,21 @@
+{
+  "name": "tsugu",
+  "version": "0.0.1",
+  "private": true,
+  "description": "tsugu — the agentic layer for the agent economy on Somnia",
+  "packageManager": "pnpm@9.12.0",
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=9"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "contracts:build": "pnpm --filter @tsugu/contracts build",
+    "contracts:test": "pnpm --filter @tsugu/contracts test"
+  },
+  "devDependencies": {
+    "turbo": "^2.1.0"
+  }
+}
