@@ -1,5 +1,6 @@
 import { describe, it, beforeAll, afterAll, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { execSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -17,7 +18,24 @@ import { startAnvil, type AnvilHandle, ANVIL_KEY, ANVIL_ACCOUNT } from "./anvil.
 import { AsomClient, type AsomAddresses } from "../src/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const ARTIFACTS = join(here, "..", "..", "contracts", "out");
+const CONTRACTS_DIR = join(here, "..", "..", "contracts");
+const ARTIFACTS = join(CONTRACTS_DIR, "out");
+
+/**
+ * Foundry artifacts (`out/`) are gitignored, so they won't exist on a fresh
+ * clone or in CI. Build them on demand rather than failing with a cryptic
+ * ENOENT — keeps `pnpm test` self-contained given Foundry is installed.
+ */
+function ensureArtifacts(): void {
+  if (existsSync(join(ARTIFACTS, "AgentRegistry.sol/AgentRegistry.json"))) return;
+  try {
+    execSync("forge build", { cwd: CONTRACTS_DIR, stdio: "ignore" });
+  } catch {
+    throw new Error(
+      "Foundry artifacts missing and `forge build` failed. Install Foundry (foundryup) to run the integration tests.",
+    );
+  }
+}
 
 function artifact(path: string): { abi: Abi; bytecode: `0x${string}` } {
   const json = JSON.parse(readFileSync(join(ARTIFACTS, path), "utf8"));
@@ -29,6 +47,7 @@ let addresses: AsomAddresses;
 const account = privateKeyToAccount(ANVIL_KEY);
 
 beforeAll(async () => {
+  ensureArtifacts();
   handle = await startAnvil();
   const transport = http(handle.rpcUrl);
   const wallet = createWalletClient({ account, chain: anvil, transport });
@@ -88,7 +107,8 @@ describe("AsomClient integration (anvil)", () => {
     expect(agent.account).toMatch(/^0x[0-9a-fA-F]{40}$/);
 
     // wallet was actually deployed (has code) and seeded
-    const code = await c["publicClient"].getBytecode({ address: agent.account });
+    const pub = createPublicClient({ chain: anvil, transport: http(handle.rpcUrl) });
+    const code = await pub.getCode({ address: agent.account });
     expect(code && code.length > 2).toBe(true);
     expect(await c.getBalance(agent.account)).toBe(parseEther("0.05"));
 
