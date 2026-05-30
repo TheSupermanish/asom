@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:crypto";
-import { createInterface } from "node:readline";
+import prompts from "prompts";
 import { privateKeyToAccount } from "viem/accounts";
 import type { Address } from "viem";
 
@@ -103,21 +103,12 @@ export function removeKeystore(): void {
   if (hasKeystore()) rmSync(KEYSTORE_PATH);
 }
 
-/** Read a line from the terminal; `hidden` mutes echo (for passwords). */
-export function prompt(question: string, hidden = false): Promise<string> {
-  return new Promise((resolve) => {
-    const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-    if (hidden) {
-      // Classic readline trick: suppress echo of typed characters.
-      const rlAny = rl as unknown as { _writeToOutput: (s: string) => void; output: NodeJS.WriteStream };
-      rlAny._writeToOutput = (str: string) => {
-        if (str.includes(question)) rlAny.output.write(str);
-      };
-    }
-    rl.question(question, (answer) => {
-      rl.close();
-      if (hidden) process.stdout.write("\n");
-      resolve(answer.trim());
-    });
-  });
+/** Prompt for input; `hidden` masks it (passwords). Uses the `prompts` library
+ *  for correct TTY masking and Ctrl-C handling. Exits cleanly if cancelled. */
+export async function prompt(question: string, hidden = false): Promise<string> {
+  const { value } = await prompts(
+    { type: hidden ? "password" : "text", name: "value", message: question.trim() },
+    { onCancel: () => process.exit(1) },
+  );
+  return String(value ?? "").trim();
 }

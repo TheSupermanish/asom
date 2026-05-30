@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import pc from "picocolors";
 import { parseEther } from "viem";
+import { generatePrivateKey } from "viem/accounts";
 import { config as loadEnv } from "dotenv";
 import { TsuguClient, type Agent } from "@tsugu/sdk";
 import { saveAgent, readAgent, listAgents } from "./store.js";
@@ -46,7 +47,13 @@ program
  */
 async function getKey(): Promise<`0x${string}`> {
   const fromEnv = process.env.PRIVATE_KEY as `0x${string}` | undefined;
-  if (fromEnv) return fromEnv;
+  if (fromEnv) {
+    console.error(
+      muted("  ⚠ using a plaintext PRIVATE_KEY — fine for testnet. For an encrypted wallet: ") +
+        accent("tsugu login"),
+    );
+    return fromEnv;
+  }
 
   if (hasKeystore()) {
     const pw = process.env.TSUGU_PASSWORD ?? (await prompt("  password: ", true));
@@ -110,19 +117,34 @@ function printAgent(c: TsuguClient, agent: Agent, balanceWei?: bigint) {
 
 program
   .command("login")
-  .description("Import your funded Somnia key into an encrypted keystore (one time)")
-  .action(async () => {
+  .description("Set up your wallet: generate a new one or import an existing key (encrypted)")
+  .option("--import", "import an existing private key instead of generating a new wallet")
+  .action(async (opts: { import?: boolean }) => {
     banner();
     if (hasKeystore()) {
-      const yes = await prompt(`  A key is already stored (${keystoreAddress()}). Replace it? [y/N] `);
+      const yes = await prompt(`  A wallet is already set up (${keystoreAddress()}). Replace it? [y/N] `);
       if (yes.toLowerCase() !== "y") return;
     }
-    const key = (await prompt("  private key (0x…, hidden): ", true)) as `0x${string}`;
-    if (!/^0x[0-9a-fA-F]{64}$/.test(key)) {
-      console.error(bad("  ✗ Not a valid 0x-prefixed private key."));
-      process.exit(1);
+
+    // Default = generate a fresh wallet. --import (or answering "i") brings your own.
+    let mode = opts.import ? "import" : "new";
+    if (!opts.import) {
+      const choice = await prompt("  [N]ew wallet or [i]mport existing key?  (N) ");
+      if (choice.toLowerCase().startsWith("i")) mode = "import";
     }
-    const pw = await prompt("  new password: ", true);
+
+    let key: `0x${string}`;
+    if (mode === "import") {
+      key = (await prompt("  private key (0x…, hidden): ", true)) as `0x${string}`;
+      if (!/^0x[0-9a-fA-F]{64}$/.test(key)) {
+        console.error(bad("  ✗ Not a valid 0x-prefixed private key."));
+        process.exit(1);
+      }
+    } else {
+      key = generatePrivateKey(); // generated locally, on your machine — never sent anywhere
+    }
+
+    const pw = await prompt("  set a password: ", true);
     const pw2 = await prompt("  confirm password: ", true);
     if (pw !== pw2) {
       console.error(bad("  ✗ Passwords don't match."));
@@ -132,10 +154,18 @@ program
       console.error(bad("  ✗ Use at least 8 characters."));
       process.exit(1);
     }
+
     const addr = saveKeystore(key, pw);
-    console.log(ok(`  ✓ Key encrypted and saved to ${TSUGU_HOME}/keystore.json`));
+    console.log("");
+    console.log(ok(`  ✓ Wallet ${mode === "new" ? "created" : "imported"} and encrypted → ${TSUGU_HOME}/keystore.json`));
     console.log(`  ${label("address")} ${accent(addr)}`);
-    console.log(muted("  Your key is encrypted on this machine. tsugu never sends or stores it anywhere else."));
+    if (mode === "new") {
+      console.log("");
+      console.log(muted("  This is a brand-new wallet with 0 STT. Fund it to create agents:"));
+      console.log(`  ${accent(FAUCET_URL)}`);
+      console.log(muted(`  Back it up any time with: tsugu key export`));
+    }
+    console.log(muted("  Your key is encrypted on this machine. tsugu never sends or stores it anywhere."));
   });
 
 const key = program.command("key").description("Manage your encrypted key");
