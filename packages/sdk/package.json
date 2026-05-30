@@ -2,6 +2,18 @@
   "name": "@tsugu/sdk",
   "version": "0.0.1",
   "description": "TypeScript SDK for tsugu — create, resolve, and operate agents on Somnia",
+  "license": "MIT",
+  "author": "Wono Labs",
+  "homepage": "https://github.com/TheSupermanish/tsugu#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TheSupermanish/tsugu.git",
+    "directory": "packages/sdk"
+  },
+  "bugs": {
+    "url": "https://github.com/TheSupermanish/tsugu/issues"
+  },
+  "keywords": ["somnia", "erc-6551", "agents", "web3", "viem", "tsugu"],
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -12,11 +24,17 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": ["dist", "README.md"],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",
     "dev": "tsup src/index.ts --format esm --dts --watch",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
     "viem": "^2.21.0"
@@ -24,6 +42,7 @@
   "devDependencies": {
     "@types/node": "^22.7.0",
     "tsup": "^8.3.0",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
   }
 }

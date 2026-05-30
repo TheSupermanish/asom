@@ -2,15 +2,31 @@
   "name": "@tsugu/cli",
   "version": "0.0.1",
   "description": "tsugu command-line tool — create and operate agents on Somnia",
+  "license": "MIT",
+  "author": "Wono Labs",
+  "homepage": "https://github.com/TheSupermanish/tsugu#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TheSupermanish/tsugu.git",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/TheSupermanish/tsugu/issues"
+  },
+  "keywords": ["somnia", "erc-6551", "agents", "cli", "tsugu"],
   "type": "module",
   "bin": {
     "tsugu": "./dist/index.js"
   },
-  "files": ["dist"],
+  "files": ["dist", "README.md"],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsup",
     "dev": "tsx src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
     "@tsugu/sdk": "workspace:*",

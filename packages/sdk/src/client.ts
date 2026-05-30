@@ -5,6 +5,7 @@ import {
   parseEther,
   getAddress,
   type Address,
+  type Chain,
   type Hash,
   type PublicClient,
   type WalletClient,
@@ -25,16 +26,24 @@ export interface Agent {
   createdAt: number;
 }
 
+/** tsugu contract addresses for a single deployment. */
+export interface TsuguAddresses {
+  agentRegistry: Address;
+  agentNFT: Address;
+  erc6551Registry: Address;
+  agentAccount: Address;
+}
+
 export interface TsuguClientOptions {
-  /** Chain id. Defaults to Shannon (50312). */
-  chainId?: number;
+  /** Target chain. Defaults to Somnia Shannon. Pass a custom chain (e.g. anvil) for tests/forks. */
+  chain?: Chain;
   /** RPC URL override. Defaults to the chain's public RPC. */
   rpcUrl?: string;
   /** 0x-prefixed private key. Required only for write operations. */
   privateKey?: `0x${string}`;
+  /** Address override. Defaults to the known deployment for `chain.id`. */
+  addresses?: TsuguAddresses;
 }
-
-const SHANNON_ID = 50312;
 
 /**
  * TsuguClient — the programmatic entry point to tsugu.
@@ -43,28 +52,32 @@ const SHANNON_ID = 50312;
  * Write methods (createAgent) require `privateKey`.
  */
 export class TsuguClient {
+  readonly chain: Chain;
   readonly chainId: number;
-  readonly addresses: (typeof deployments)[number];
+  readonly addresses: TsuguAddresses;
   private readonly publicClient: PublicClient;
   private readonly account?: Account;
   private readonly walletClient?: WalletClient;
 
   constructor(opts: TsuguClientOptions = {}) {
-    this.chainId = opts.chainId ?? SHANNON_ID;
-    const addresses = deployments[this.chainId];
+    this.chain = opts.chain ?? shannon;
+    this.chainId = this.chain.id;
+    const addresses = opts.addresses ?? deployments[this.chainId];
     if (!addresses) {
-      throw new Error(`tsugu: no deployment known for chain ${this.chainId}`);
+      throw new Error(
+        `tsugu: no deployment known for chain ${this.chainId}; pass { addresses }`,
+      );
     }
     this.addresses = addresses;
 
     const transport = http(opts.rpcUrl);
-    this.publicClient = createPublicClient({ chain: shannon, transport });
+    this.publicClient = createPublicClient({ chain: this.chain, transport });
 
     if (opts.privateKey) {
       this.account = privateKeyToAccount(opts.privateKey);
       this.walletClient = createWalletClient({
         account: this.account,
-        chain: shannon,
+        chain: this.chain,
         transport,
       });
     }
@@ -125,8 +138,10 @@ export class TsuguClient {
     const owner = opts.owner ? getAddress(opts.owner) : this.account.address;
     const value = opts.seedStt ? parseEther(opts.seedStt) : 0n;
 
-    // Shannon's gas estimator undercounts hard; pin a generous explicit limit.
-    const hash = await this.walletClient.writeContract({
+    // Simulate first: this reverts early (with the decoded reason, e.g. NameTaken)
+    // before any gas is spent, instead of mining a failed tx. Shannon's gas
+    // estimator undercounts, so we pin an explicit limit; simulate carries it through.
+    const { request } = await this.publicClient.simulateContract({
       address: this.addresses.agentRegistry,
       abi: agentRegistryAbi,
       functionName: "register",
@@ -134,16 +149,25 @@ export class TsuguClient {
       value,
       gas: 5_000_000n,
       account: this.account,
-      chain: shannon,
     });
 
-    await this.publicClient.waitForTransactionReceipt({ hash });
+    const hash = await this.walletClient.writeContract(request);
+
+    // Defensive: a tx can still revert after a clean simulate (state changed
+    // between simulate and mine). waitForTransactionReceipt does NOT throw on
+    // a reverted status, so check it explicitly.
+    const receipt = await this.publicClient.waitForTransactionReceipt({ hash });
+    if (receipt.status === "reverted") {
+      throw new Error(`tsugu: register("${name}") reverted on-chain (tx ${hash})`);
+    }
+
     const agent = await this.resolve(name);
     return { ...agent, txHash: hash };
   }
 
-  /** Explorer URL for an address or tx hash. */
+  /** Explorer URL for an address or tx hash. Empty string if the chain has no explorer. */
   explorer(kind: "address" | "tx", value: string): string {
-    return `${shannon.blockExplorers.default.url}/${kind}/${value}`;
+    const base = this.chain.blockExplorers?.default?.url;
+    return base ? `${base}/${kind}/${value}` : "";
   }
 }
