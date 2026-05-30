@@ -8,11 +8,28 @@ Built for the [Encode Club × Somnia Agentathon](https://www.encodeclub.com/prog
 
 ## Status
 
-**Day 1** — `OracleAgent.sol` deployed on Shannon, wrapping the Somnia Agents JSON API to fetch consensus-verified BTC prices on-chain.
+- **Day 1** — `OracleAgent.sol` live on Shannon: wraps the Somnia Agents JSON API for consensus-verified BTC prices on-chain (Tier 5, consensus-verified compute).
+- **Day 2** — Identity layer live: `register("neo", owner)` mints an agent NFT, deploys its ERC-6551 wallet, and records the name. Plus the `tsugu` CLI:
+
+```bash
+tsugu create neo        # → neo@tsugu: name + ERC-6551 wallet, on-chain, one command
+tsugu resolve neo       # look up any agent
+```
+
+## What an agent gets
+
+| Primitive | Status | Where |
+|---|---|---|
+| **Name** — `neo@tsugu` resolves on-chain | ✅ | `AgentRegistry` |
+| **Wallet** — ERC-6551 token-bound account | ✅ | `AgentAccount` + `ERC6551Registry` |
+| **Consensus compute** — Somnia Agents (Qwen3 / JSON API) | ✅ | `OracleAgent` |
+| Inbox — `<name>@tsugu` email | planned | — |
+| Reputation tier — Anonymous → Consensus-verified | planned | `AgentReputation` |
 
 ## Stack
 
-- **Contracts:** Solidity 0.8.20+, Foundry
+- **Contracts:** Solidity 0.8.24 (Foundry), OpenZeppelin 5.0.2, ERC-721 + ERC-6551
+- **SDK / CLI:** TypeScript, viem ([`@tsugu/sdk`](./packages/sdk), [`@tsugu/cli`](./packages/cli))
 - **Monorepo:** pnpm workspaces + Turborepo
 - **Chain:** Somnia Shannon testnet (chain ID 50312)
 
@@ -20,8 +37,14 @@ Built for the [Encode Club × Somnia Agentathon](https://www.encodeclub.com/prog
 
 ```bash
 pnpm install
-cp .env.example .env  # fill in PRIVATE_KEY
-pnpm contracts:test
+
+# contracts
+pnpm contracts:test                       # 44 tests
+cp packages/contracts/.env.example packages/contracts/.env   # add PRIVATE_KEY
+
+# CLI
+pnpm --filter @tsugu/cli build
+node packages/cli/dist/index.js resolve neo
 ```
 
-See [`packages/contracts/`](./packages/contracts) for the contract layer.
+Deployed addresses + tx hashes: [`packages/contracts/DEPLOYMENTS.md`](./packages/contracts/DEPLOYMENTS.md).

@@ -1,0 +1,27 @@
+{
+  "name": "@tsugu/cli",
+  "version": "0.0.1",
+  "description": "tsugu command-line tool — create and operate agents on Somnia",
+  "type": "module",
+  "bin": {
+    "tsugu": "./dist/index.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tsugu/sdk": "workspace:*",
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.5",
+    "picocolors": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "tsup": "^8.3.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
