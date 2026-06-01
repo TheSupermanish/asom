@@ -51,7 +51,18 @@ and a much deeper test suite. All flows verified live on Somnia Shannon.
 
 - `hasEverOwned` forces a fresh block number (`cacheTime: 0`) so an agent registered
   moments earlier isn't missed by viem's cached head — which would make a just-used
-  index look free.
+  index look free; pages `eth_getLogs` in 1000-block windows (Shannon's cap); and
+  throws if `deployBlock` is ahead of the chain head rather than silently reporting
+  "never owned".
+- **CLI gas top-up is now sized from the live gas price × the SDK's pinned gas limit**
+  (`opGasBudget`), not a static 0.01 STT floor that was smaller than the ~0.018 STT an
+  `exec` actually authorizes — which could leave a freshly-topped owner key unable to
+  send. `exec`/`transfer` exact-wei top-up via `sendWei`.
+- `parseStt` rejects scientific/hex notation and >18 decimals with the friendly message
+  instead of letting them reach `parseEther` (opaque) or silently truncate. CLI amounts
+  are compared in wei end-to-end (no lossy `parseFloat`).
+- `agentExecute`/`transferAgent` now `simulateContract` first, so underfunded wallets,
+  non-receiver recipients, and bad ops fail pre-broadcast with a decoded reason.
 - Doc accuracy: SDK README `{ chain }` (not `chainId`), corrected contract test counts.
 
 ### Verified on Shannon

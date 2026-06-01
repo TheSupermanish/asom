@@ -41,16 +41,24 @@ export function isValidName(name: string): boolean {
 }
 
 /**
- * Parse an STT amount (a decimal string like "0.05") to wei, rejecting NaN,
- * negative, and non-finite inputs with a clear message — instead of letting a
- * bad value flow into parseEther and throw something opaque (or compute NaN).
+ * A plain non-negative decimal with at most 18 fractional digits (1 wei of STT).
+ * Deliberately strict: no scientific notation ("1e-3"), no hex ("0x1"), no sign,
+ * no >18-decimal silent truncation — all of which `Number()` would wave through
+ * only for `parseEther` to then reject opaquely (or quietly round).
+ */
+const STT_DECIMAL = /^\d+(\.\d{1,18})?$/;
+
+/**
+ * Parse an STT amount (a decimal string like "0.05") to wei. Rejects anything that
+ * isn't a clean non-negative decimal with ≤18 fractional digits, with one friendly
+ * message — so a bad value never reaches `parseEther` to throw something opaque.
  */
 export function parseStt(amount: string): bigint {
-  const n = Number(amount);
-  // Note: Number("") and Number("  ") are 0, not NaN — reject blank explicitly so
-  // it never reaches parseEther("") (which throws an opaque BigInt error).
-  if (amount.trim() === "" || !Number.isFinite(n) || n < 0) {
-    throw new Error(`tsugu: expected a positive decimal STT amount like "0.05", got ${JSON.stringify(amount)}`);
+  const s = amount.trim();
+  if (!STT_DECIMAL.test(s)) {
+    throw new Error(
+      `tsugu: expected a positive decimal STT amount like "0.05" (≤18 decimals, no scientific/hex notation), got ${JSON.stringify(amount)}`,
+    );
   }
-  return parseEther(amount as `${number}`);
+  return parseEther(s as `${number}`);
 }

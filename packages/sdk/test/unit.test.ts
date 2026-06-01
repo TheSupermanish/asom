@@ -89,4 +89,14 @@ describe("parseStt", () => {
     expect(() => parseStt("-1")).toThrow(/positive decimal/);
     expect(() => parseStt("")).toThrow(/positive decimal/);
   });
+
+  it("rejects scientific/hex notation and >18 decimals (no opaque parseEther passthrough)", () => {
+    for (const bad of ["1e-3", "1E3", "0x10", "1.2345678901234567890", "Infinity", "1,5", ".", "5."]) {
+      expect(() => parseStt(bad)).toThrow(/positive decimal/);
+    }
+  });
+
+  it("trims surrounding whitespace", () => {
+    expect(parseStt("  0.05  ")).toBe(parseEther("0.05"));
+  });
 });
