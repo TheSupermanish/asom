@@ -2,6 +2,8 @@ import type { Address } from "viem";
 
 /// tsugu contract deployments, keyed by chain id.
 /// Shannon (50312) — see packages/contracts/DEPLOYMENTS.md.
+/// `deployBlock` bounds historical event scans (e.g. hasEverOwned) so they don't
+/// walk the chain from genesis.
 export const deployments: Record<
   number,
   {
@@ -9,12 +11,16 @@ export const deployments: Record<
     agentNFT: Address;
     erc6551Registry: Address;
     agentAccount: Address;
+    deployBlock?: bigint;
   }
 > = {
   50312: {
-    agentRegistry: "0xa98a6d4BC0099D2fc5D1d81a79770592c2a91a08",
-    agentNFT: "0x7DeD25aEb99e8b31accC1EE658c7E9361D4DAB70",
-    erc6551Registry: "0x4575c8652bE0db8bbDc01b43DEDe8585414b2002",
-    agentAccount: "0x9b7F1A851E549de4716a548c87734C6bEC5acd51",
+    // Hardened identity stack (register() is now reentrancy-guarded). The prior
+    // deployment (0xa98a…1a08) is deprecated — see packages/contracts/DEPLOYMENTS.md.
+    agentRegistry: "0x9Df3c688e2aE988Ff63672A98335d3BEfAdC452E",
+    agentNFT: "0x2DCD1758CaA40c004cA9F8593b032c384eA10925",
+    erc6551Registry: "0x7f3b56f5D737010885FaAeAa771fb2e61d33Ec8B",
+    agentAccount: "0x4c4e4B24613c285e33c4c0b5DB0603936A0df600",
+    deployBlock: 398072018n,
   },
 };
