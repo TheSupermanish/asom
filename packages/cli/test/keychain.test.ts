@@ -29,9 +29,9 @@ describe("keychain — transfer-safe HD index allocation", () => {
     expect(await kc.nextFreeIndex(oracle(used), SEED)).toBe(4);
   });
 
-  it("fills the lowest never-used gap (an index is free iff never used)", async () => {
-    const used = new Set([2].map((i) => ks.deriveAccount(SEED, i).address.toLowerCase()));
-    expect(await kc.nextFreeIndex(oracle(used), SEED)).toBe(1);
+  it("fills a genuine interior gap — returns the lowest index never used (1,3 used → 2)", async () => {
+    const used = new Set([1, 3].map((i) => ks.deriveAccount(SEED, i).address.toLowerCase()));
+    expect(await kc.nextFreeIndex(oracle(used), SEED)).toBe(2);
   });
 
   it("treats a fresh seed (nothing owned) as index 1", async () => {

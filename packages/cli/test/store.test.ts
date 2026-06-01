@@ -41,6 +41,13 @@ describe("store (local agent records)", () => {
     expect(store.readAgent("ghost")).toBeNull();
   });
 
+  it("round-trips a single-key-mode record (index: null)", () => {
+    const rec = { ...sample("solo"), index: null };
+    store.saveAgent(rec);
+    expect(store.readAgent("solo")).toEqual(rec);
+    expect(store.listAgents().find((a) => a.name === "solo")?.index).toBeNull();
+  });
+
   it("lists saved agents and SKIPS a corrupt file without throwing", () => {
     store.saveAgent(sample("neo"));
     store.saveAgent(sample("trinity"));

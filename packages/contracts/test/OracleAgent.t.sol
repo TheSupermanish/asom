@@ -87,6 +87,22 @@ contract MockAgentPlatform is IAgentRequester {
     receive() external payable {}
 }
 
+/// @dev A non-owner caller that cannot receive ETH — so refunding its overpayment
+///      fails. Used to prove requestUintFromJson reverts RefundFailed rather than
+///      silently swallowing a failed refund.
+contract RejectsEth {
+    OracleAgent internal oracle;
+
+    constructor(OracleAgent oracle_) {
+        oracle = oracle_;
+    }
+
+    function fire(uint256 value) external {
+        oracle.requestBitcoinPrice{value: value}();
+    }
+    // No receive()/fallback() → the refund call back to this contract fails.
+}
+
 contract OracleAgentTest is Test {
     MockAgentPlatform internal platform;
     OracleAgent internal oracle;
@@ -336,6 +352,15 @@ contract OracleAgentTest is Test {
         // Oracle forwarded the deposit and refunded the rest — nothing trapped.
         assertEq(address(oracle).balance, 0, "no excess trapped in oracle");
         assertEq(platform.lastValue(), deposit, "platform got exactly the deposit");
+    }
+
+    function test_request_revertsRefundFailedWhenCallerRejectsEth() public {
+        RejectsEth rejector = new RejectsEth(oracle);
+        uint256 deposit = oracle.requiredDeposit();
+        vm.deal(address(rejector), 1 ether);
+        // Overpays by 0.5 ETH; the refund back to `rejector` fails (no receive()).
+        vm.expectRevert(OracleAgent.RefundFailed.selector);
+        rejector.fire(deposit + 0.5 ether);
     }
 
     function test_request_noRefundForExactNonOwnerPayment() public {

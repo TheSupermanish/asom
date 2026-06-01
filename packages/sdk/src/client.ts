@@ -196,6 +196,14 @@ export class AsomClient {
     // would otherwise miss an agent registered moments ago and make a just-used HD
     // index look free (the exact key-reuse footgun this guards against).
     const latest = await this.publicClient.getBlockNumber({ cacheTime: 0 });
+    // Fail loud rather than silently report "never owned": a deployBlock ahead of
+    // the chain head (misconfig / wrong network / reorg) would make every address
+    // look free and could lead to HD key reuse.
+    if (this.deployBlock > latest) {
+      throw new Error(
+        `asom: deployBlock ${this.deployBlock} is ahead of chain head ${latest} — refusing to report ownership (wrong network or misconfigured deployBlock?)`,
+      );
+    }
     for (let from = this.deployBlock; from <= latest; from += LOG_SCAN_CHUNK) {
       const to = from + LOG_SCAN_CHUNK - 1n > latest ? latest : from + LOG_SCAN_CHUNK - 1n;
       const logs = await this.publicClient.getLogs({
@@ -218,6 +226,24 @@ export class AsomClient {
       abi: agentAccountAbi,
       functionName: "state",
     });
+  }
+
+  /** Current gas price (wei). */
+  async getGasPrice(): Promise<bigint> {
+    return this.publicClient.getGasPrice();
+  }
+
+  /**
+   * Recommended STT (wei) an agent's owner key should hold to safely send one
+   * write (execute/transfer). Sized from the largest pinned gas limit and the live
+   * gas price, with a 2× margin to cover EIP-1559 base-fee inflation + tip + drift.
+   * The CLI uses this to top up a cold owner key — so the top-up tracks the gas the
+   * SDK actually pins, instead of a stale hardcoded floor.
+   */
+  async opGasBudget(): Promise<bigint> {
+    const gasPrice = await this.getGasPrice();
+    const maxGas = GAS.execute > GAS.transfer ? GAS.execute : GAS.transfer;
+    return gasPrice * maxGas * 2n;
   }
 
   /**
@@ -290,15 +316,17 @@ export class AsomClient {
       );
     }
 
-    const hash = await walletClient.writeContract({
+    // Simulate first: e.g. a `to` contract that can't receive an ERC-721 reverts
+    // here (decoded) instead of after mining and wasting the owner's gas.
+    const { request } = await this.publicClient.simulateContract({
       address: this.addresses.agentNFT,
       abi: agentNftAbi,
       functionName: "safeTransferFrom",
       args: [agent.owner, recipient, agent.tokenId],
       account,
-      chain: this.chain,
       gas: GAS.transfer,
     });
+    const hash = await walletClient.writeContract(request);
     const receipt = await this.publicClient.waitForTransactionReceipt({ hash });
     if (receipt.status === "reverted") throw new Error(`asom: transfer of ${name}@asom reverted (tx ${hash})`);
     return hash;
@@ -341,18 +369,18 @@ export class AsomClient {
     const data: Hex = call.data ?? "0x";
     const operation = call.operation ?? 0;
 
-    // No msg.value: the agent spends its OWN wallet balance for `value` (that is
-    // the point of the agent having funds). The owner only pays gas. If the wallet
-    // is underfunded the inner call reverts, surfaced by the receipt check below.
-    const hash = await walletClient.writeContract({
+    // Simulate first: a too-poor wallet, a reverting target, or a bad operation
+    // fails here with a decoded reason and no gas spent. No msg.value — the agent
+    // spends its OWN wallet balance for `value` (the point of it having funds).
+    const { request } = await this.publicClient.simulateContract({
       address: acct,
       abi: agentAccountAbi,
       functionName: "execute",
       args: [getAddress(call.to), value, data, operation],
       account,
-      chain: this.chain,
       gas: GAS.execute,
     });
+    const hash = await walletClient.writeContract(request);
     const receipt = await this.publicClient.waitForTransactionReceipt({ hash });
     if (receipt.status === "reverted") throw new Error(`asom: agent execute reverted (tx ${hash})`);
     return hash;
@@ -364,10 +392,15 @@ export class AsomClient {
    * @param stt  amount as a decimal string, e.g. "0.01"
    */
   async send(to: Address, stt: string): Promise<Hash> {
+    return this.sendWei(to, parseStt(stt));
+  }
+
+  /** Send an exact wei amount — used when the caller already has a bigint (e.g. a
+   *  gas top-up) and rounding through a decimal string would lose precision. */
+  async sendWei(to: Address, value: bigint): Promise<Hash> {
     const { account, walletClient } = this.requireSigner("send");
     const recipient = getAddress(to);
     if (recipient === zeroAddress) throw new Error("asom: cannot send to the zero address");
-    const value = parseStt(stt);
 
     const hash = await walletClient.sendTransaction({
       to: recipient,

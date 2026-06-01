@@ -105,24 +105,15 @@ function requireValidName(name: string): void {
 
 /** Validate a decimal STT amount (rejects NaN/negative) and return it as a number
  *  for threshold math. Exits friendly on bad input. */
-function parseAmount(raw: string, flag: string): number {
+function parseAmount(raw: string, flag: string): bigint {
   try {
-    parseStt(raw);
+    return parseStt(raw);
   } catch {
     console.error(bad(`  ✗ ${flag} must be a positive decimal like 0.05 (got ${JSON.stringify(raw)})`));
     process.exit(1);
   }
-  return parseFloat(raw);
 }
 
-/** Minimum STT to keep on an agent's owner key so it can pay Shannon's inflated gas. */
-const GAS_FLOOR_STT = 0.01;
-
-/**
- * Ensure the agent's owner key can pay for gas. Self-sovereign HD agents are
- * owned by a derived key that starts empty; signing from it (exec/transfer) needs
- * gas. If it's short, top it up transparently from your funding account.
- */
 /**
  * The private key that controls `agent`. Fast path: trust the local record's
  * stored HD index, but ONLY if it actually derives the agent's current owner
@@ -140,15 +131,24 @@ function resolveOwnerKey(name: string, agent: Agent, seed: string | undefined, o
   return ownerKeyFor(name, agent.owner, seed, operatorKey, operatorAddr);
 }
 
+/**
+ * Ensure the agent's owner key can pay for gas. Self-sovereign HD agents are owned
+ * by a derived key that starts empty; signing from it (exec/transfer) needs gas. The
+ * top-up is sized from `opGasBudget()` — the live gas price × the SDK's largest
+ * pinned gas limit × margin — so it tracks the gas the write actually authorizes
+ * (a static floor silently breaks when the gas price or pins move). No-op when the
+ * owner key IS the operator (single-key mode / index 0).
+ */
 async function ensureOwnerGas(operator: AsomClient, ownerClient: AsomClient, label: string): Promise<void> {
   const ownerAddr = ownerClient.signerAddress!;
-  // Same key as the operator (single-key mode / owner is index 0): nothing to do.
   if (operator.signerAddress && ownerAddr.toLowerCase() === operator.signerAddress.toLowerCase()) return;
+  const budget = await operator.opGasBudget();
   const bal = await operator.getBalance(ownerAddr);
-  if (bal >= parseEther(GAS_FLOOR_STT.toString())) return;
-  await assertFunded(operator, GAS_FLOOR_STT + 0.02, `top up ${label}'s owner key for gas`);
-  console.log(muted(`  ⛽ ${label}'s owner key ${ownerAddr} is out of gas; topping up ${GAS_FLOOR_STT} STT...`));
-  await operator.send(ownerAddr, GAS_FLOOR_STT.toString());
+  if (bal >= budget) return;
+  const topUp = budget - bal;
+  await assertFunded(operator, topUp + parseEther("0.02"), `top up ${label}'s owner key for gas`);
+  console.log(muted(`  ⛽ ${label}'s owner key ${ownerAddr} needs gas; topping up ${formatStt(topUp)} STT...`));
+  await operator.sendWei(ownerAddr, topUp);
 }
 
 function formatStt(wei: bigint): string {
@@ -157,13 +157,13 @@ function formatStt(wei: bigint): string {
   return `${whole}.${frac}`;
 }
 
-async function assertFunded(c: AsomClient, needStt: number, what: string): Promise<void> {
+async function assertFunded(c: AsomClient, needWei: bigint, what: string): Promise<void> {
   const addr = c.signerAddress!;
   const bal = await c.getBalance(addr);
-  if (bal >= parseEther(needStt.toString())) return;
+  if (bal >= needWei) return;
   console.log("");
   console.error(bad(`  ✗ Not enough STT to ${what}.`));
-  console.error(`    ${accent(addr)} has ${warn(formatStt(bal))} STT, needs ~${needStt}.`);
+  console.error(`    ${accent(addr)} has ${warn(formatStt(bal))} STT, needs ~${formatStt(needWei)}.`);
   if (c.chainId === 50312) console.error(`    Grab testnet STT → ${accent(FAUCET_URL)}`);
   else console.error(`    Send ${accent("SOMI")} to ${accent(addr)} to fund it.`);
   console.log("");
@@ -298,10 +298,10 @@ program
   .action(async (name: string, opts: { seed: string }) => {
     banner();
     requireValidName(name); // fail fast, no password/RPC needed for a bad name
-    const seedStt = parseAmount(opts.seed, "--seed");
+    const seedWei = parseAmount(opts.seed, "--seed");
     const { operatorKey, seed } = await unlock();
     const c = client(operatorKey);
-    await assertFunded(c, seedStt + 0.05, `create ${name}@asom`);
+    await assertFunded(c, seedWei + parseEther("0.05"), `create ${name}@asom`);
 
     if (!(await c.isAvailable(name))) {
       console.error(bad(`  ✗ ${name}@asom is already taken.`));
@@ -405,11 +405,11 @@ program
       process.exit(1);
     }
     const amt = parseAmount(opts.wallet, "--wallet");
-    if (amt <= 0) {
+    if (amt <= 0n) {
       console.log(muted("  Nothing to send. Use --wallet <stt>."));
       return;
     }
-    await assertFunded(c, amt + 0.02, `fund ${name}@asom`);
+    await assertFunded(c, amt + parseEther("0.02"), `fund ${name}@asom`);
     const tx = await c.send(agent.account, opts.wallet);
     console.log(ok(`  👛 ${opts.wallet} STT`) + ` → ${name}@asom wallet ${muted(agent.account)}`);
     console.log(`     ${muted(c.explorer("tx", tx))}`);
@@ -454,9 +454,9 @@ program
     const ac = client(ownerKey);
 
     // The agent pays --value from its OWN wallet; make sure it can.
-    if (value > 0) {
+    if (value > 0n) {
       const walletBal = await op.getBalance(agent.account);
-      if (walletBal < parseEther(opts.value)) {
+      if (walletBal < value) {
         console.error(bad(`  ✗ ${name}@asom's wallet has ${formatStt(walletBal)} STT, needs ${opts.value}.`));
         console.error(muted(`    Fund it first: asom fund ${name} --wallet ${opts.value}`));
         process.exit(1);
@@ -471,7 +471,7 @@ program
         value: opts.value,
         data: opts.data as Hex,
       });
-      console.log(ok(`  ⚡ ${name}@asom executed`) + ` → ${muted(opts.to)}${value > 0 ? ` (${opts.value} STT)` : ""}`);
+      console.log(ok(`  ⚡ ${name}@asom executed`) + ` → ${muted(opts.to)}${value > 0n ? ` (${opts.value} STT)` : ""}`);
       console.log(`     ${muted(op.explorer("tx", tx))}`);
     } catch (err) {
       console.error(bad("  ✗ exec failed:"), (err as Error).message);

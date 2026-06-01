@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createPublicClient,
+  createTestClient,
   createWalletClient,
   http,
   getAddress,
@@ -180,6 +181,8 @@ const KEY4 = "0x47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a
 const KEY5 = "0x8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092edffba" as const;
 const KEY6 = "0x92db14e403b83dfe3df233f83dfa3a0d7096f21ca9b0d6d6b8d88b2b4ec1564e" as const;
 const KEY7 = "0x4bbbf85ce3377467afe5d46f804f221813b2bb87f24d81f60f1fcdbf7cbf4356" as const;
+const KEY8 = "0xdbda1821b80551c9d65939329250298aa3472ba22feea921c0cf5d620ea67b97" as const;
+const KEY9 = "0x2a871d0798f97d79848a013d4936a73bf4cc922c825d33c1cf7073dff6d409c6" as const;
 const addrOf = (k: `0x${string}`): Address => privateKeyToAccount(k).address;
 function owned(key: `0x${string}`): AsomClient {
   return new AsomClient({ chain: anvil, rpcUrl: handle.rpcUrl, addresses, privateKey: key });
@@ -265,5 +268,29 @@ describe("AsomClient agent operations (anvil)", () => {
     const reader = client(false);
     await expect(reader.transferAgent("neo", addrOf(KEY5))).rejects.toThrow(/requires a privateKey/);
     await expect(reader.agentExecute("neo", { to: addrOf(KEY5) })).rejects.toThrow(/requires a privateKey/);
+  });
+
+  it("agentExecute rejects pre-broadcast when the agent wallet is underfunded", async () => {
+    const operator = client();
+    const agent = await operator.createAgent("poor-agent", { owner: addrOf(KEY4) });
+    // Wallet holds nothing; trying to send 1 STT from it must fail at simulate.
+    await expect(owned(KEY4).agentExecute(agent.account, { to: addrOf(KEY5), value: "1" })).rejects.toThrow();
+  });
+
+  it("hasEverOwned pages across multiple 1000-block windows", async () => {
+    const operator = client();
+    const test = createTestClient({ chain: anvil, mode: "anvil", transport: http(handle.rpcUrl) });
+    const lateOwner = addrOf(KEY8);
+    const neverOwner = addrOf(KEY9);
+
+    expect(await operator.hasEverOwned(lateOwner)).toBe(false);
+    // Advance well past one 1000-block scan window, THEN register — so finding the
+    // owner forces the scan to page beyond the first window.
+    await test.mine({ blocks: 1100 });
+    const agent = await operator.createAgent("late-window", { owner: lateOwner });
+    expect(agent.owner).toBe(getAddress(lateOwner));
+
+    expect(await operator.hasEverOwned(lateOwner)).toBe(true);
+    expect(await operator.hasEverOwned(neverOwner)).toBe(false);
   });
 });
