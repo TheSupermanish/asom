@@ -173,3 +173,97 @@ describe("AsomClient integration (anvil)", () => {
     expect(await c.agentCountOf(fresh)).toBe(1n);
   });
 });
+
+// Anvil default keys not used by the tests above (#0=operator, #1/#3 already own
+// agents). Deriving addresses from keys keeps owner/recipient in sync.
+const KEY4 = "0x47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a" as const;
+const KEY5 = "0x8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092edffba" as const;
+const KEY6 = "0x92db14e403b83dfe3df233f83dfa3a0d7096f21ca9b0d6d6b8d88b2b4ec1564e" as const;
+const KEY7 = "0x4bbbf85ce3377467afe5d46f804f221813b2bb87f24d81f60f1fcdbf7cbf4356" as const;
+const addrOf = (k: `0x${string}`): Address => privateKeyToAccount(k).address;
+function owned(key: `0x${string}`): AsomClient {
+  return new AsomClient({ chain: anvil, rpcUrl: handle.rpcUrl, addresses, privateKey: key });
+}
+
+describe("AsomClient agent operations (anvil)", () => {
+  it("agentExecute makes the agent spend its OWN wallet funds, gated to the owner", async () => {
+    const operator = client();
+    const ownerAddr = addrOf(KEY4);
+    const recipient = addrOf(KEY5);
+    const agent = await operator.createAgent("exec-agent", { owner: ownerAddr });
+
+    // Fund the agent's wallet (not the owner key).
+    await operator.send(agent.account, "0.5");
+    expect(await operator.getBalance(agent.account)).toBe(parseEther("0.5"));
+
+    // The owner drives the agent to send 0.1 from its own wallet.
+    const before = await operator.getBalance(recipient);
+    await owned(KEY4).agentExecute(agent.account, { to: recipient, value: "0.1" });
+    expect((await operator.getBalance(recipient)) - before).toBe(parseEther("0.1"));
+    expect(await operator.getBalance(agent.account)).toBe(parseEther("0.4")); // came from the wallet
+
+    // A non-owner cannot drive it.
+    await expect(operator.agentExecute(agent.account, { to: recipient, value: "0.1" })).rejects.toThrow(
+      /not the owner/,
+    );
+  });
+
+  it("agentExecute resolves the wallet by name", async () => {
+    const operator = client();
+    const agent = await operator.createAgent("exec-by-name", { owner: addrOf(KEY4) });
+    await operator.send(agent.account, "0.2");
+    const recipient = addrOf(KEY6);
+    const before = await operator.getBalance(recipient);
+    await owned(KEY4).agentExecute("exec-by-name", { to: recipient, value: "0.05" });
+    expect((await operator.getBalance(recipient)) - before).toBe(parseEther("0.05"));
+  });
+
+  it("transferAgent moves ownership and wallet control follows", async () => {
+    const operator = client();
+    const agent = await operator.createAgent("xfer-agent", { owner: addrOf(KEY4) });
+    expect(agent.owner).toBe(getAddress(addrOf(KEY4)));
+
+    await owned(KEY4).transferAgent("xfer-agent", addrOf(KEY6));
+    expect((await operator.resolve("xfer-agent")).owner).toBe(getAddress(addrOf(KEY6)));
+
+    // The new owner can operate the wallet; the old owner can no longer transfer it.
+    await operator.send(agent.account, "0.2");
+    const recipient = addrOf(KEY5);
+    const before = await operator.getBalance(recipient);
+    await owned(KEY6).agentExecute(agent.account, { to: recipient, value: "0.05" });
+    expect((await operator.getBalance(recipient)) - before).toBe(parseEther("0.05"));
+
+    await expect(owned(KEY4).transferAgent("xfer-agent", addrOf(KEY5))).rejects.toThrow(/not the owner/);
+  });
+
+  it("transferAgent rejects the zero address", async () => {
+    const operator = client();
+    await operator.createAgent("xfer-guard", { owner: addrOf(KEY4) });
+    await expect(
+      owned(KEY4).transferAgent("xfer-guard", "0x0000000000000000000000000000000000000000" as Address),
+    ).rejects.toThrow(/zero address/);
+  });
+
+  it("hasEverOwned is monotonic — stays true after the agent is transferred away", async () => {
+    const operator = client();
+    const histOwner = addrOf(KEY7); // fresh, never registered
+
+    expect(await operator.hasEverOwned(histOwner)).toBe(false);
+    const agent = await operator.createAgent("hist-agent", { owner: histOwner });
+    expect(await operator.hasEverOwned(histOwner)).toBe(true);
+    expect(await operator.agentCountOf(histOwner)).toBe(1n);
+
+    // Transfer it away: live balance drops to 0, but history is permanent — so the
+    // CLI will never re-derive this index's key for a new agent.
+    await owned(KEY7).transferAgent("hist-agent", addrOf(KEY5));
+    expect(await operator.agentCountOf(histOwner)).toBe(0n);
+    expect(await operator.hasEverOwned(histOwner)).toBe(true);
+    expect(agent.account).toMatch(/^0x[0-9a-fA-F]{40}$/);
+  });
+
+  it("agentExecute / transferAgent without a key throw", async () => {
+    const reader = client(false);
+    await expect(reader.transferAgent("neo", addrOf(KEY5))).rejects.toThrow(/requires a privateKey/);
+    await expect(reader.agentExecute("neo", { to: addrOf(KEY5) })).rejects.toThrow(/requires a privateKey/);
+  });
+});

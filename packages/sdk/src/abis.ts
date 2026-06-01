@@ -82,4 +82,81 @@ export const agentNftAbi = [
     inputs: [],
     outputs: [{ name: "", type: "uint256" }],
   },
+  // Ownership transfer — handing over the NFT hands over the whole agent
+  // (name + wallet). safeTransferFrom enforces the receiver can custody an
+  // ERC-721 (EOA or onERC721Received-implementing contract).
+  {
+    type: "function",
+    name: "safeTransferFrom",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "from", type: "address" },
+      { name: "to", type: "address" },
+      { name: "tokenId", type: "uint256" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "transferFrom",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "from", type: "address" },
+      { name: "to", type: "address" },
+      { name: "tokenId", type: "uint256" },
+    ],
+    outputs: [],
+  },
+] as const;
+
+/// AgentAccount — the ERC-6551 token-bound wallet. Only the bound NFT's owner
+/// may `execute`; this is how an agent acts on-chain (move funds, call contracts).
+export const agentAccountAbi = [
+  {
+    type: "function",
+    name: "execute",
+    stateMutability: "payable",
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "value", type: "uint256" },
+      { name: "data", type: "bytes" },
+      { name: "operation", type: "uint8" },
+    ],
+    outputs: [{ name: "result", type: "bytes" }],
+  },
+  {
+    type: "function",
+    name: "token",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [
+      { name: "chainId", type: "uint256" },
+      { name: "tokenContract", type: "address" },
+      { name: "tokenId", type: "uint256" },
+    ],
+  },
+  {
+    type: "function",
+    name: "owner",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
+  },
+  {
+    type: "function",
+    name: "state",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "isValidSigner",
+    stateMutability: "view",
+    inputs: [
+      { name: "signer", type: "address" },
+      { name: "", type: "bytes" },
+    ],
+    outputs: [{ name: "magicValue", type: "bytes4" }],
+  },
 ] as const;

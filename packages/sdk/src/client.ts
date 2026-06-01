@@ -2,11 +2,15 @@ import {
   createPublicClient,
   createWalletClient,
   http,
-  parseEther,
+  fallback,
   getAddress,
+  isAddress,
+  parseEventLogs,
+  zeroAddress,
   type Address,
   type Chain,
   type Hash,
+  type Hex,
   type PublicClient,
   type WalletClient,
   type Account,
@@ -14,7 +18,8 @@ import {
 import { privateKeyToAccount } from "viem/accounts";
 import { shannon } from "./chain.js";
 import { deployments } from "./addresses.js";
-import { agentRegistryAbi, agentNftAbi } from "./abis.js";
+import { agentRegistryAbi, agentNftAbi, agentAccountAbi } from "./abis.js";
+import { validateName, parseStt } from "./validate.js";
 
 export interface Agent {
   name: string;
@@ -39,22 +44,53 @@ export interface AsomClientOptions {
   chain?: Chain;
   /** RPC URL override. Defaults to the chain's public RPC. */
   rpcUrl?: string;
+  /** Multiple RPC URLs for a viem fallback transport (resilience). Takes precedence over rpcUrl. */
+  rpcUrls?: string[];
   /** 0x-prefixed private key. Required only for write operations. */
-  privateKey?: `0x${string}`;
+  privateKey?: Hex;
   /** Address override. Defaults to the known deployment for `chain.id`. */
   addresses?: AsomAddresses;
+  /** Lower-bound block for event scans (hasEverOwned). Defaults to the known deploy block, else 0. */
+  deployBlock?: bigint;
 }
+
+// Shannon inflates gas ~20x across the board and its estimator undercounts ~8x,
+// so we pin explicit, generous limits (you only pay gas actually used).
+const GAS = {
+  register: 5_000_000n,
+  // Shannon inflates gas ~20x: an ERC-721 safeTransferFrom does several SSTOREs,
+  // and execute does an SSTORE plus an arbitrary forwarded call — pin generously
+  // (you only pay gas actually used on success).
+  transfer: 2_000_000n,
+  execute: 3_000_000n,
+  send: 800_000n,
+} as const;
+
+// Chunk size for paginated log scans. Shannon's public RPC caps eth_getLogs at a
+// 1000-block range, so we page in 1000-block windows from the registry's deploy
+// block. NB: on a fast chain this scan grows with registry age — a production
+// deployment fronts this with an indexer/subgraph rather than scanning live.
+const LOG_SCAN_CHUNK = 1000n;
+
+const HTTP_OPTS = { retryCount: 3, timeout: 30_000 } as const;
+
+const agentRegisteredEvent = agentRegistryAbi.find(
+  (item): item is Extract<(typeof agentRegistryAbi)[number], { type: "event" }> =>
+    item.type === "event" && item.name === "AgentRegistered",
+)!;
 
 /**
  * AsomClient — the programmatic entry point to asom.
  *
- * Read methods (resolve, isAvailable, getBalance) need no key.
- * Write methods (createAgent) require `privateKey`.
+ * Read methods (resolve, isAvailable, getBalance, hasEverOwned) need no key.
+ * Write methods (createAgent, transferAgent, agentExecute, send) require `privateKey`.
  */
 export class AsomClient {
   readonly chain: Chain;
   readonly chainId: number;
   readonly addresses: AsomAddresses;
+  /** Block from which event scans start (registry deploy block on a known chain). */
+  readonly deployBlock: bigint;
   private readonly publicClient: PublicClient;
   private readonly account?: Account;
   private readonly walletClient?: WalletClient;
@@ -62,24 +98,33 @@ export class AsomClient {
   constructor(opts: AsomClientOptions = {}) {
     this.chain = opts.chain ?? shannon;
     this.chainId = this.chain.id;
-    const addresses = opts.addresses ?? deployments[this.chainId];
-    if (!addresses) {
-      throw new Error(
-        `asom: no deployment known for chain ${this.chainId}; pass { addresses }`,
-      );
-    }
-    this.addresses = addresses;
 
-    const transport = http(opts.rpcUrl);
+    const dep = deployments[this.chainId];
+    const addresses = opts.addresses ?? dep;
+    if (!addresses) {
+      throw new Error(`asom: no deployment known for chain ${this.chainId}; pass { addresses }`);
+    }
+    this.addresses = {
+      agentRegistry: addresses.agentRegistry,
+      agentNFT: addresses.agentNFT,
+      erc6551Registry: addresses.erc6551Registry,
+      agentAccount: addresses.agentAccount,
+    };
+    this.deployBlock = opts.deployBlock ?? dep?.deployBlock ?? 0n;
+
+    const urls = opts.rpcUrls?.length ? opts.rpcUrls : opts.rpcUrl ? [opts.rpcUrl] : [];
+    const transport =
+      urls.length > 1
+        ? fallback(urls.map((u) => http(u, HTTP_OPTS)))
+        : http(urls[0], HTTP_OPTS);
     this.publicClient = createPublicClient({ chain: this.chain, transport });
 
     if (opts.privateKey) {
+      if (!/^0x[0-9a-fA-F]{64}$/.test(opts.privateKey)) {
+        throw new Error("asom: privateKey must be a 0x-prefixed 32-byte hex string");
+      }
       this.account = privateKeyToAccount(opts.privateKey);
-      this.walletClient = createWalletClient({
-        account: this.account,
-        chain: this.chain,
-        transport,
-      });
+      this.walletClient = createWalletClient({ account: this.account, chain: this.chain, transport });
     }
   }
 
@@ -88,15 +133,21 @@ export class AsomClient {
     return this.account?.address;
   }
 
+  private requireSigner(method: string): { account: Account; walletClient: WalletClient } {
+    if (!this.walletClient || !this.account) {
+      throw new Error(`asom: ${method} requires a privateKey`);
+    }
+    return { account: this.account, walletClient: this.walletClient };
+  }
+
   /** Resolve `<name>` to its agent. Throws if unregistered. */
   async resolve(name: string): Promise<Agent> {
-    const [tokenId, account, owner, createdAt] =
-      await this.publicClient.readContract({
-        address: this.addresses.agentRegistry,
-        abi: agentRegistryAbi,
-        functionName: "resolve",
-        args: [name],
-      });
+    const [tokenId, account, owner, createdAt] = await this.publicClient.readContract({
+      address: this.addresses.agentRegistry,
+      abi: agentRegistryAbi,
+      functionName: "resolve",
+      args: [name],
+    });
     return {
       name,
       tokenId,
@@ -121,8 +172,7 @@ export class AsomClient {
     return this.publicClient.getBalance({ address: getAddress(address) });
   }
 
-  /** How many agent NFTs an address owns. Lets callers find a free HD index
-   *  from chain state alone (recoverable from the seed, unlike local records). */
+  /** How many agent NFTs an address currently owns. */
   async agentCountOf(owner: Address): Promise<bigint> {
     return this.publicClient.readContract({
       address: this.addresses.agentNFT,
@@ -133,47 +183,179 @@ export class AsomClient {
   }
 
   /**
+   * True if `owner` has EVER been the registered owner of any agent — even if
+   * the agent was later transferred away. Scans AgentRegistered events (owner is
+   * indexed). Unlike a live `balanceOf`, this is monotonic: it lets the CLI pick
+   * a fresh HD index that has never been used, so transferring an agent can never
+   * cause a later `create` to re-derive the same key. Chain-derived, so it works
+   * from the seed alone with no local state.
+   */
+  async hasEverOwned(owner: Address): Promise<boolean> {
+    const target = getAddress(owner);
+    // cacheTime: 0 — force a FRESH head. viem caches getBlockNumber (~4s), which
+    // would otherwise miss an agent registered moments ago and make a just-used HD
+    // index look free (the exact key-reuse footgun this guards against).
+    const latest = await this.publicClient.getBlockNumber({ cacheTime: 0 });
+    for (let from = this.deployBlock; from <= latest; from += LOG_SCAN_CHUNK) {
+      const to = from + LOG_SCAN_CHUNK - 1n > latest ? latest : from + LOG_SCAN_CHUNK - 1n;
+      const logs = await this.publicClient.getLogs({
+        address: this.addresses.agentRegistry,
+        event: agentRegisteredEvent,
+        fromBlock: from,
+        toBlock: to,
+      });
+      // Match owner in JS rather than via an indexed-topic arg filter — robust
+      // across RPC quirks, and the decoded `args.owner` is exact.
+      if (logs.some((l) => l.args.owner !== undefined && getAddress(l.args.owner) === target)) return true;
+    }
+    return false;
+  }
+
+  /** The current on-chain `state` nonce of an agent wallet (bumps on every execute). */
+  async agentState(account: Address): Promise<bigint> {
+    return this.publicClient.readContract({
+      address: getAddress(account),
+      abi: agentAccountAbi,
+      functionName: "state",
+    });
+  }
+
+  /**
    * Create an agent: mint the NFT, deploy its ERC-6551 wallet, register the name.
-   * @param name   the agent name (validated on-chain: a-z, 0-9, hyphen; 1-32 chars)
+   * @param name   the agent name (validated client-side AND on-chain)
    * @param opts.owner  who receives the agent NFT (defaults to the signer)
    * @param opts.seedStt  STT to seed the new wallet with, as a decimal string (e.g. "0.05")
    * @returns the created agent plus the registration tx hash
    */
-  async createAgent(
-    name: string,
-    opts: { owner?: Address; seedStt?: string } = {},
-  ): Promise<Agent & { txHash: Hash }> {
-    if (!this.walletClient || !this.account) {
-      throw new Error("asom: createAgent requires a privateKey");
-    }
-    const owner = opts.owner ? getAddress(opts.owner) : this.account.address;
-    const value = opts.seedStt ? parseEther(opts.seedStt) : 0n;
+  async createAgent(name: string, opts: { owner?: Address; seedStt?: string } = {}): Promise<Agent & { txHash: Hash }> {
+    const { account, walletClient } = this.requireSigner("createAgent");
+    validateName(name); // fail fast with a friendly message before any RPC
+    const owner = opts.owner ? getAddress(opts.owner) : account.address;
+    const value = opts.seedStt ? parseStt(opts.seedStt) : 0n;
 
-    // Simulate first: this reverts early (with the decoded reason, e.g. NameTaken)
-    // before any gas is spent, instead of mining a failed tx. Shannon's gas
-    // estimator undercounts, so we pin an explicit limit; simulate carries it through.
+    // Simulate first: reverts early (with the decoded reason, e.g. NameTaken)
+    // before any gas is spent. Shannon's estimator undercounts, so pin gas.
     const { request } = await this.publicClient.simulateContract({
       address: this.addresses.agentRegistry,
       abi: agentRegistryAbi,
       functionName: "register",
       args: [name, owner],
       value,
-      gas: 5_000_000n,
-      account: this.account,
+      gas: GAS.register,
+      account,
     });
 
-    const hash = await this.walletClient.writeContract(request);
+    const hash = await walletClient.writeContract(request);
 
-    // Defensive: a tx can still revert after a clean simulate (state changed
-    // between simulate and mine). waitForTransactionReceipt does NOT throw on
-    // a reverted status, so check it explicitly.
     const receipt = await this.publicClient.waitForTransactionReceipt({ hash });
     if (receipt.status === "reverted") {
       throw new Error(`asom: register("${name}") reverted on-chain (tx ${hash})`);
     }
 
+    // Read the canonical result from the AgentRegistered event we just emitted,
+    // rather than re-resolving by name (avoids an extra read + name coupling).
+    const events = parseEventLogs({ abi: agentRegistryAbi, eventName: "AgentRegistered", logs: receipt.logs });
+    const ev = events.find((e) => getAddress(e.address) === getAddress(this.addresses.agentRegistry));
+    if (ev) {
+      const block = await this.publicClient.getBlock({ blockNumber: receipt.blockNumber });
+      return {
+        name,
+        tokenId: ev.args.tokenId,
+        account: getAddress(ev.args.account),
+        owner: getAddress(ev.args.owner),
+        createdAt: Number(block.timestamp),
+        txHash: hash,
+      };
+    }
+    // Fallback: the log was somehow absent — resolve by name.
     const agent = await this.resolve(name);
     return { ...agent, txHash: hash };
+  }
+
+  /**
+   * Transfer an agent to a new owner — hands over the NFT, and with it the
+   * agent's wallet and name. The signer MUST be the agent's current owner.
+   * @param name  the agent to transfer
+   * @param to    the new owner
+   */
+  async transferAgent(name: string, to: Address): Promise<Hash> {
+    const { account, walletClient } = this.requireSigner("transferAgent");
+    const recipient = getAddress(to);
+    if (recipient === zeroAddress) throw new Error("asom: cannot transfer an agent to the zero address");
+
+    const agent = await this.resolve(name);
+    if (getAddress(agent.owner) !== account.address) {
+      throw new Error(
+        `asom: signer ${account.address} is not the owner of ${name}@asom (owner is ${agent.owner}); only the owner can transfer it`,
+      );
+    }
+
+    const hash = await walletClient.writeContract({
+      address: this.addresses.agentNFT,
+      abi: agentNftAbi,
+      functionName: "safeTransferFrom",
+      args: [agent.owner, recipient, agent.tokenId],
+      account,
+      chain: this.chain,
+      gas: GAS.transfer,
+    });
+    const receipt = await this.publicClient.waitForTransactionReceipt({ hash });
+    if (receipt.status === "reverted") throw new Error(`asom: transfer of ${name}@asom reverted (tx ${hash})`);
+    return hash;
+  }
+
+  /**
+   * Make an agent act: call `execute` on its ERC-6551 wallet so the agent sends
+   * STT, calls a contract, or moves a token it custodies. The signer MUST be the
+   * agent's current owner (execute is owner-gated on-chain).
+   * @param target  the agent name, an Agent, or the agent wallet address
+   * @param call.to        the call target
+   * @param call.value     STT to send with the call, as a decimal string (default "0")
+   * @param call.data      calldata hex (default "0x" — a plain value transfer)
+   * @param call.operation must be 0 (CALL); reserved for future ops
+   */
+  async agentExecute(
+    target: string | Agent | Address,
+    call: { to: Address; value?: string; data?: Hex; operation?: number },
+  ): Promise<Hash> {
+    const { account, walletClient } = this.requireSigner("agentExecute");
+
+    let acct: Address;
+    if (typeof target === "object") acct = getAddress(target.account);
+    else if (isAddress(target)) acct = getAddress(target);
+    else acct = (await this.resolve(target)).account;
+
+    // Friendly pre-check: surface "you're not the owner" before spending gas.
+    const owner = await this.publicClient.readContract({
+      address: acct,
+      abi: agentAccountAbi,
+      functionName: "owner",
+    });
+    if (getAddress(owner) !== account.address) {
+      throw new Error(
+        `asom: signer ${account.address} is not the owner of agent wallet ${acct} (owner is ${owner}); execute is owner-gated`,
+      );
+    }
+
+    const value = call.value ? parseStt(call.value) : 0n;
+    const data: Hex = call.data ?? "0x";
+    const operation = call.operation ?? 0;
+
+    // No msg.value: the agent spends its OWN wallet balance for `value` (that is
+    // the point of the agent having funds). The owner only pays gas. If the wallet
+    // is underfunded the inner call reverts, surfaced by the receipt check below.
+    const hash = await walletClient.writeContract({
+      address: acct,
+      abi: agentAccountAbi,
+      functionName: "execute",
+      args: [getAddress(call.to), value, data, operation],
+      account,
+      chain: this.chain,
+      gas: GAS.execute,
+    });
+    const receipt = await this.publicClient.waitForTransactionReceipt({ hash });
+    if (receipt.status === "reverted") throw new Error(`asom: agent execute reverted (tx ${hash})`);
+    return hash;
   }
 
   /**
@@ -182,22 +364,22 @@ export class AsomClient {
    * @param stt  amount as a decimal string, e.g. "0.01"
    */
   async send(to: Address, stt: string): Promise<Hash> {
-    if (!this.walletClient || !this.account) {
-      throw new Error("asom: send requires a privateKey");
-    }
-    const hash = await this.walletClient.sendTransaction({
-      to: getAddress(to),
-      value: parseEther(stt),
-      account: this.account,
+    const { account, walletClient } = this.requireSigner("send");
+    const recipient = getAddress(to);
+    if (recipient === zeroAddress) throw new Error("asom: cannot send to the zero address");
+    const value = parseStt(stt);
+
+    const hash = await walletClient.sendTransaction({
+      to: recipient,
+      value,
+      account,
       chain: this.chain,
       // Shannon inflates intrinsic gas: a plain transfer that's ~21k elsewhere
-      // OOG's well past 100k here. Pin generously — you only pay gas actually used.
-      gas: 500_000n,
+      // OOGs well past 100k here. Pin generously — you only pay gas actually used.
+      gas: GAS.send,
     });
     const receipt = await this.publicClient.waitForTransactionReceipt({ hash });
-    if (receipt.status === "reverted") {
-      throw new Error(`asom: send to ${to} reverted (tx ${hash})`);
-    }
+    if (receipt.status === "reverted") throw new Error(`asom: send to ${recipient} reverted (tx ${hash})`);
     return hash;
   }
 

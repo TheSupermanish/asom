@@ -1,6 +1,6 @@
 {
   "name": "@asom/sdk",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "description": "TypeScript SDK for asom — create, resolve, and operate agents on Somnia",
   "license": "MIT",
   "author": "Wono Labs",
@@ -15,6 +15,9 @@
   },
   "keywords": ["somnia", "erc-6551", "agents", "web3", "viem", "asom"],
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -36,13 +39,14 @@
     "test:watch": "vitest",
     "prepublishOnly": "pnpm run build"
   },
-  "dependencies": {
-    "viem": "^2.21.0"
+  "peerDependencies": {
+    "viem": ">=2.21.0 <3"
   },
   "devDependencies": {
     "@types/node": "^22.7.0",
     "tsup": "^8.3.0",
     "typescript": "^5.6.0",
+    "viem": "^2.21.0",
     "vitest": "^2.1.0"
   }
 }
