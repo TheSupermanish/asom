@@ -58,6 +58,30 @@ describe("keystore (HD seed)", () => {
     expect(() => ks.loadSeed("pw-pw-pw-pw")).toThrow(/corrupt keystore/);
   });
 
+  it("rejects an inflated scrypt N (memory-exhaustion guard)", () => {
+    ks.saveSeed(ks.newMnemonic(), "pw-pw-pw-pw");
+    const f = JSON.parse(readFileSync(keystorePath(), "utf8"));
+    f.n = 1 << 22; // above the ceiling
+    writeFileSync(keystorePath(), JSON.stringify(f));
+    expect(() => ks.loadSeed("pw-pw-pw-pw")).toThrow(/corrupt keystore/);
+  });
+
+  it("rejects a non-power-of-two scrypt N", () => {
+    ks.saveSeed(ks.newMnemonic(), "pw-pw-pw-pw");
+    const f = JSON.parse(readFileSync(keystorePath(), "utf8"));
+    f.n = 30000; // within [floor, ceil] but not a power of two
+    writeFileSync(keystorePath(), JSON.stringify(f));
+    expect(() => ks.loadSeed("pw-pw-pw-pw")).toThrow(/corrupt keystore/);
+  });
+
+  it("rejects an unsupported keystore version/type before touching crypto", () => {
+    ks.saveSeed(ks.newMnemonic(), "pw-pw-pw-pw");
+    const f = JSON.parse(readFileSync(keystorePath(), "utf8"));
+    f.version = 3;
+    writeFileSync(keystorePath(), JSON.stringify(f));
+    expect(() => ks.loadSeed("pw-pw-pw-pw")).toThrow(/unsupported keystore version/);
+  });
+
   it("writes the keystore with 0600 permissions", () => {
     ks.saveSeed(ks.newMnemonic(), "pw-pw-pw-pw");
     expect(statSync(keystorePath()).mode & 0o777).toBe(0o600);

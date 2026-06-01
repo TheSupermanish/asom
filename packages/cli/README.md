@@ -5,11 +5,13 @@ The `tsugu` command-line tool. Create and operate agents on Somnia — every age
 ```bash
 npm i -g @tsugu/cli
 
-tsugu login              # import your Somnia key once → encrypted keystore
-tsugu create neo         # name + wallet, owned by your key
+tsugu login              # create/import your seed once → encrypted keystore
+tsugu create neo         # name + wallet, with its own derived key
 tsugu resolve neo        # look up any agent (no key needed)
 tsugu ls                 # agents you own
 tsugu fund neo --wallet 0.05
+tsugu exec neo --to 0xRecipient --value 0.01   # the agent acts (spends its own wallet)
+tsugu transfer neo 0xNewOwner                  # hand the agent over (name + wallet)
 ```
 
 ## Keys: encrypted, non-custodial
@@ -46,7 +48,32 @@ tsugu create neo --seed 0.1
   📜 tx     https://shannon-explorer.somnia.network/tx/…
 ```
 
-The agent's wallet is its own address (receives payments, holds its balance), but **you** control it via your key. Each agent's funds stay separate; one owner. `tsugu fund <name> --wallet <stt>` tops up an agent's wallet later.
+The agent's wallet is its own address (receives payments, holds its balance), controlled by the agent's own key derived from your seed. Each agent's funds stay separate. `tsugu fund <name> --wallet <stt>` tops up an agent's wallet later.
+
+## `tsugu exec <name>` — make an agent act
+
+Calls `execute()` on the agent's ERC-6551 wallet, signed by the agent's own key.
+The `--value` is spent **from the agent's wallet** (not your funding account); your
+funding account only pays gas (and the agent's key is auto-topped-up for gas if empty).
+
+```bash
+tsugu exec neo --to 0xRecipient --value 0.01          # send 0.01 STT from neo's wallet
+tsugu exec neo --to 0xContract --data 0xabcd1234       # call a contract as neo
+```
+
+## `tsugu transfer <name> <to>` — hand an agent over
+
+Transfers the AgentNFT to a new owner. Ownership of the name **and** the wallet (and
+its funds) goes with it — no migration. After transfer the agent leaves your local list.
+
+```bash
+tsugu transfer neo 0xNewOwner
+```
+
+## Other commands
+
+`tsugu available <name>` (is a name free?) · `tsugu whoami` (your funding address) ·
+`tsugu key address` / `tsugu key export` · `tsugu logout`.
 
 ## Config
 
@@ -55,5 +82,6 @@ The agent's wallet is its own address (receives payments, holds its balance), bu
 | `TSUGU_PASSWORD` | Unlock the keystore non-interactively (scripts/CI) |
 | `PRIVATE_KEY` | Bypass the keystore (plaintext, testnet shortcut) |
 | `SHANNON_RPC_URL` | RPC override |
+| `TSUGU_HOME` | Override the tsugu home dir (default `~/.tsugu`) |
 
 No STT to pay gas? The CLI points you at the faucet. Built on [`@tsugu/sdk`](../sdk).

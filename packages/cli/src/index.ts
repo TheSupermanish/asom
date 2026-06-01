@@ -1,9 +1,10 @@
 import { Command } from "commander";
 import pc from "picocolors";
-import { parseEther } from "viem";
+import { parseEther, isAddress, isHex, type Address } from "viem";
 import { config as loadEnv } from "dotenv";
-import { TsuguClient, type Agent } from "@tsugu/sdk";
-import { saveAgent, readAgent, listAgents } from "./store.js";
+import { TsuguClient, type Agent, validateName, parseStt } from "@tsugu/sdk";
+import { saveAgent, readAgent, listAgents, removeAgent } from "./store.js";
+import { nextFreeIndex, ownerKeyFor } from "./keychain.js";
 import {
   TSUGU_HOME,
   hasKeystore,
@@ -18,6 +19,10 @@ import {
 } from "./keystore.js";
 
 loadEnv();
+
+// Injected by tsup at build time (see tsup.config.ts); undefined under tsx/vitest.
+declare const __TSUGU_CLI_VERSION__: string | undefined;
+const VERSION = typeof __TSUGU_CLI_VERSION__ !== "undefined" ? __TSUGU_CLI_VERSION__ : "0.0.0-dev";
 
 const FAUCET_URL = "https://cloud.google.com/application/web3/faucet/somnia/shannon";
 
@@ -38,7 +43,7 @@ const program = new Command();
 program
   .name("tsugu")
   .description("Create and operate agents on Somnia — an HD keychain: one seed, a key per agent.")
-  .version("0.0.2");
+  .version(VERSION);
 
 type Hex = `0x${string}`;
 
@@ -87,17 +92,63 @@ function client(key?: Hex): TsuguClient {
   return new TsuguClient({ privateKey: key, rpcUrl: process.env.SHANNON_RPC_URL });
 }
 
-/**
- * First HD index (>=1) whose derived address owns no agent yet. Uses on-chain
- * state, not local records, so it survives restoring from just the seed —
- * never reuses an index and never derives a duplicate owner key.
- */
-async function nextFreeIndex(c: TsuguClient, seed: string): Promise<number> {
-  for (let i = 1; i <= 1000; i++) {
-    const { address } = deriveAccount(seed, i);
-    if ((await c.agentCountOf(address)) === 0n) return i;
+/** Validate an agent name client-side (same rules as the contract). Exits with a
+ *  friendly message instead of paying an RPC round-trip for a raw revert. */
+function requireValidName(name: string): void {
+  try {
+    validateName(name);
+  } catch (e) {
+    console.error(bad(`  ✗ ${(e as Error).message.replace(/^tsugu: /, "")}`));
+    process.exit(1);
   }
-  throw new Error("no free HD index found below 1000");
+}
+
+/** Validate a decimal STT amount (rejects NaN/negative) and return it as a number
+ *  for threshold math. Exits friendly on bad input. */
+function parseAmount(raw: string, flag: string): number {
+  try {
+    parseStt(raw);
+  } catch {
+    console.error(bad(`  ✗ ${flag} must be a positive decimal like 0.05 (got ${JSON.stringify(raw)})`));
+    process.exit(1);
+  }
+  return parseFloat(raw);
+}
+
+/** Minimum STT to keep on an agent's owner key so it can pay Shannon's inflated gas. */
+const GAS_FLOOR_STT = 0.01;
+
+/**
+ * Ensure the agent's owner key can pay for gas. Self-sovereign HD agents are
+ * owned by a derived key that starts empty; signing from it (exec/transfer) needs
+ * gas. If it's short, top it up transparently from your funding account.
+ */
+/**
+ * The private key that controls `agent`. Fast path: trust the local record's
+ * stored HD index, but ONLY if it actually derives the agent's current owner
+ * (so a transfer can't make a stale index point at the wrong key). Otherwise
+ * fall back to scanning the seed for the owner (ownerKeyFor).
+ */
+function resolveOwnerKey(name: string, agent: Agent, seed: string | undefined, operatorKey: Hex, operatorAddr: Address): Hex {
+  if (seed) {
+    const rec = readAgent(name);
+    if (rec && rec.index !== null) {
+      const d = deriveAccount(seed, rec.index);
+      if (d.address.toLowerCase() === agent.owner.toLowerCase()) return d.privateKey;
+    }
+  }
+  return ownerKeyFor(name, agent.owner, seed, operatorKey, operatorAddr);
+}
+
+async function ensureOwnerGas(operator: TsuguClient, ownerClient: TsuguClient, label: string): Promise<void> {
+  const ownerAddr = ownerClient.signerAddress!;
+  // Same key as the operator (single-key mode / owner is index 0): nothing to do.
+  if (operator.signerAddress && ownerAddr.toLowerCase() === operator.signerAddress.toLowerCase()) return;
+  const bal = await operator.getBalance(ownerAddr);
+  if (bal >= parseEther(GAS_FLOOR_STT.toString())) return;
+  await assertFunded(operator, GAS_FLOOR_STT + 0.02, `top up ${label}'s owner key for gas`);
+  console.log(muted(`  ⛽ ${label}'s owner key ${ownerAddr} is out of gas; topping up ${GAS_FLOOR_STT} STT...`));
+  await operator.send(ownerAddr, GAS_FLOOR_STT.toString());
 }
 
 function formatStt(wei: bigint): string {
@@ -246,9 +297,11 @@ program
   .option("-s, --seed <stt>", "STT to seed the new agent wallet with", "0.02")
   .action(async (name: string, opts: { seed: string }) => {
     banner();
+    requireValidName(name); // fail fast, no password/RPC needed for a bad name
+    const seedStt = parseAmount(opts.seed, "--seed");
     const { operatorKey, seed } = await unlock();
     const c = client(operatorKey);
-    await assertFunded(c, parseFloat(opts.seed) + 0.05, `create ${name}@tsugu`);
+    await assertFunded(c, seedStt + 0.05, `create ${name}@tsugu`);
 
     if (!(await c.isAvailable(name))) {
       console.error(bad(`  ✗ ${name}@tsugu is already taken.`));
@@ -351,7 +404,7 @@ program
       console.error(warn(`  ${name}@tsugu is not registered.`));
       process.exit(1);
     }
-    const amt = parseFloat(opts.wallet);
+    const amt = parseAmount(opts.wallet, "--wallet");
     if (amt <= 0) {
       console.log(muted("  Nothing to send. Use --wallet <stt>."));
       return;
@@ -360,6 +413,114 @@ program
     const tx = await c.send(agent.account, opts.wallet);
     console.log(ok(`  👛 ${opts.wallet} STT`) + ` → ${name}@tsugu wallet ${muted(agent.account)}`);
     console.log(`     ${muted(c.explorer("tx", tx))}`);
+  });
+
+program
+  .command("exec")
+  .description("Make an agent act — call execute() from its wallet (send STT or call a contract)")
+  .argument("<name>", "the agent that should act")
+  .requiredOption("-t, --to <address>", "the call target address")
+  .option("-v, --value <stt>", "STT to send from the agent's own wallet", "0")
+  .option("-d, --data <hex>", "calldata for a contract call (0x...)", "0x")
+  .action(async (name: string, opts: { to: string; value: string; data: string }) => {
+    banner();
+    if (!isAddress(opts.to)) {
+      console.error(bad("  ✗ --to must be a valid 0x address."));
+      process.exit(1);
+    }
+    if (!isHex(opts.data)) {
+      console.error(bad("  ✗ --data must be 0x-prefixed hex."));
+      process.exit(1);
+    }
+    const value = parseAmount(opts.value, "--value");
+    const { operatorKey, seed } = await unlock();
+    const op = client(operatorKey);
+
+    let agent: Agent;
+    try {
+      agent = await op.resolve(name);
+    } catch {
+      console.error(warn(`  ${name}@tsugu is not registered.`));
+      process.exit(1);
+    }
+
+    let ownerKey: Hex;
+    try {
+      ownerKey = resolveOwnerKey(name, agent, seed, operatorKey, op.signerAddress!);
+    } catch (e) {
+      console.error(bad(`  ✗ ${(e as Error).message}`));
+      process.exit(1);
+    }
+    const ac = client(ownerKey);
+
+    // The agent pays --value from its OWN wallet; make sure it can.
+    if (value > 0) {
+      const walletBal = await op.getBalance(agent.account);
+      if (walletBal < parseEther(opts.value)) {
+        console.error(bad(`  ✗ ${name}@tsugu's wallet has ${formatStt(walletBal)} STT, needs ${opts.value}.`));
+        console.error(muted(`    Fund it first: tsugu fund ${name} --wallet ${opts.value}`));
+        process.exit(1);
+      }
+    }
+    // The owner key pays gas; top it up from your account if it's empty.
+    await ensureOwnerGas(op, ac, name);
+
+    try {
+      const tx = await ac.agentExecute(agent.account, {
+        to: opts.to as Hex,
+        value: opts.value,
+        data: opts.data as Hex,
+      });
+      console.log(ok(`  ⚡ ${name}@tsugu executed`) + ` → ${muted(opts.to)}${value > 0 ? ` (${opts.value} STT)` : ""}`);
+      console.log(`     ${muted(op.explorer("tx", tx))}`);
+    } catch (err) {
+      console.error(bad("  ✗ exec failed:"), (err as Error).message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("transfer")
+  .description("Transfer an agent to a new owner — hands over its name + wallet")
+  .argument("<name>", "the agent to transfer")
+  .argument("<to>", "the new owner address")
+  .action(async (name: string, to: string) => {
+    banner();
+    if (!isAddress(to)) {
+      console.error(bad("  ✗ <to> must be a valid 0x address."));
+      process.exit(1);
+    }
+    const { operatorKey, seed } = await unlock();
+    const op = client(operatorKey);
+
+    let agent: Agent;
+    try {
+      agent = await op.resolve(name);
+    } catch {
+      console.error(warn(`  ${name}@tsugu is not registered.`));
+      process.exit(1);
+    }
+
+    let ownerKey: Hex;
+    try {
+      ownerKey = resolveOwnerKey(name, agent, seed, operatorKey, op.signerAddress!);
+    } catch (e) {
+      console.error(bad(`  ✗ ${(e as Error).message}`));
+      process.exit(1);
+    }
+    const ac = client(ownerKey);
+    await ensureOwnerGas(op, ac, name);
+
+    try {
+      const tx = await ac.transferAgent(name, to as Hex);
+      removeAgent(name); // it's no longer an agent you self-own
+      console.log(ok(`  🤝 ${name}@tsugu transferred`) + ` → ${muted(to)}`);
+      console.log(`     ${muted(op.explorer("tx", tx))}`);
+      console.log(muted("     removed from your local list (you no longer own it)."));
+    } catch (err) {
+      console.error(bad("  ✗ transfer failed:"), (err as Error).message);
+      process.exit(1);
+    }
   });
 
 program
