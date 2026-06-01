@@ -22,6 +22,7 @@ asom resolve neo       # look up any agent
 |---|---|---|
 | **Name** — `neo@asom` resolves on-chain | ✅ | `AgentRegistry` |
 | **Wallet** — ERC-6551 token-bound account | ✅ | `AgentAccount` + `ERC6551Registry` |
+| **Operate** — the agent acts: execute calls, spend its funds, change hands | ✅ | `agentExecute` / `transferAgent` · CLI `exec`, `transfer` |
 | **Consensus compute** — Somnia Agents (Qwen3 / JSON API) | ✅ | `OracleAgent` |
 | Inbox — `<name>@asom` email | planned | — |
 | Reputation tier — Anonymous → Consensus-verified | planned | `AgentReputation` |
@@ -39,12 +40,15 @@ asom resolve neo       # look up any agent
 pnpm install
 
 # contracts
-pnpm contracts:test                       # 44 tests
+pnpm contracts:test                       # 65 tests (incl. fuzz + invariant + security)
 cp packages/contracts/.env.example packages/contracts/.env   # add PRIVATE_KEY
 
-# CLI
+# SDK + CLI
+pnpm test                                 # 65 contract + 27 SDK + 28 CLI
 pnpm --filter @asom/cli build
 node packages/cli/dist/index.js resolve neo
 ```
+
+See [`SECURITY.md`](./SECURITY.md) for the trust model and threat analysis.
 
 Deployed addresses + tx hashes: [`packages/contracts/DEPLOYMENTS.md`](./packages/contracts/DEPLOYMENTS.md).
