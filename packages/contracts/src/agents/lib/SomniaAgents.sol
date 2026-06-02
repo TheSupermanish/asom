@@ -57,4 +57,65 @@ interface IAgentRequester {
 
 interface IJsonApiAgent {
     function fetchUint(string calldata url, string calldata selector, uint8 decimals) external returns (uint256);
+    function fetchInt(string calldata url, string calldata selector, uint8 decimals) external returns (int256);
+    function fetchString(string calldata url, string calldata selector) external returns (string memory);
+    function fetchBool(string calldata url, string calldata selector) external returns (bool);
+}
+
+/// @dev Somnia LLM inference agent (Qwen3-30B, deterministic temp=0). Signatures per
+///      docs.somnia.network/agents/llm-inference — VERIFY against the live agent ABI
+///      before mainnet (the agent ID itself is currently unconfirmed; see SomniaAgentIds).
+interface ILlmAgent {
+    function inferString(string calldata prompt, string calldata system, bool cot, string[] calldata allowedValues)
+        external
+        returns (string memory);
+    function inferNumber(string calldata prompt, string calldata system, int256 min, int256 max, bool cot)
+        external
+        returns (int256);
+}
+
+/// @dev Somnia "parse website" agent. Signatures per docs — verify before mainnet.
+interface IParseAgent {
+    function ExtractString(
+        string calldata key,
+        string calldata description,
+        string[] calldata options,
+        string calldata prompt,
+        string calldata url,
+        bool resolveUrl,
+        uint256 numPages,
+        uint256 confidenceThreshold
+    ) external returns (string memory);
+}
+
+/// @dev Tunable-consensus entrypoints (separate interface so it doesn't force every
+///      IAgentRequester implementer to provide them).
+interface IAgentRequesterAdvanced {
+    function createAdvancedRequest(
+        uint256 agentId,
+        address callbackAddress,
+        bytes4 callbackSelector,
+        bytes calldata payload,
+        uint256 subcommitteeSize,
+        uint256 threshold,
+        ConsensusType consensusType,
+        uint256 timeout
+    ) external payable returns (uint256 requestId);
+
+    function getAdvancedRequestDeposit(uint256 agentId, uint256 subcommitteeSize) external view returns (uint256);
+}
+
+/// @notice Canonical Somnia Agents IDs + platform addresses. Same agentId on both
+///         networks; only the platform address differs.
+/// @dev    JSON and PARSE ids are confirmed on-chain; LLM_INFERENCE is UNVERIFIED —
+///         confirm against agents.somnia.network / on-chain before relying on it.
+///         On Shannon (testnet) there is no on-chain AgentRegistry — treat these as
+///         constants. See repo docs/SOMNIA_AI.md.
+library SomniaAgentIds {
+    uint256 internal constant JSON_API = 13174292974160097713;
+    uint256 internal constant LLM_INFERENCE = 12847293847561029384; // UNVERIFIED
+    uint256 internal constant PARSE_WEBSITE = 12875401142070969085;
+
+    address internal constant PLATFORM_TESTNET = 0x037Bb9C718F3f7fe5eCBDB0b600D607b52706776; // Shannon (50312)
+    address internal constant PLATFORM_MAINNET = 0x5E5205CF39E766118C01636bED000A54D93163E6; // Somnia (5031)
 }

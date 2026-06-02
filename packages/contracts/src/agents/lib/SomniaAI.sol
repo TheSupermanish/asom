@@ -1,0 +1,70 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import {IJsonApiAgent, ILlmAgent} from "./SomniaAgents.sol";
+
+/// @title  SomniaAI — payload encoders for invoking Somnia's AI agents
+/// @notice The reusable toolkit for building "fundamental AI" on Somnia: pure helpers
+///         that produce the `payload` bytes for `IAgentRequester.createRequest`. An tsugu
+///         agent invokes Somnia AI by sending, from its contract or its ERC-6551 wallet:
+///
+///           platform.createRequest{value: deposit}(
+///               agentId,            // from SomniaAgentIds (e.g. JSON_API / LLM_INFERENCE)
+///               address(this),      // your callback target
+///               this.handleResponse.selector,
+///               SomniaAI.encodeFetchUint(url, path, decimals)  // <- this library
+///           );
+///
+///         Keeping the encoding in one audited place means every tsugu agent speaks to the
+///         platform identically, and a capability tag (e.g. "somnia.json-fetch") maps to a
+///         concrete (agentId, encoder) pair. See repo docs/SOMNIA_AI.md.
+/// @dev    JSON encoders are against the verified agent ABI. LLM encoders are per the docs
+///         and marked experimental — confirm the live agent ABI/ID before mainnet.
+library SomniaAI {
+    // --- JSON API agent (verified) -------------------------------------------
+
+    function encodeFetchUint(string memory url, string memory jsonPath, uint8 decimals)
+        internal
+        pure
+        returns (bytes memory)
+    {
+        return abi.encodeWithSelector(IJsonApiAgent.fetchUint.selector, url, jsonPath, decimals);
+    }
+
+    function encodeFetchInt(string memory url, string memory jsonPath, uint8 decimals)
+        internal
+        pure
+        returns (bytes memory)
+    {
+        return abi.encodeWithSelector(IJsonApiAgent.fetchInt.selector, url, jsonPath, decimals);
+    }
+
+    function encodeFetchString(string memory url, string memory jsonPath) internal pure returns (bytes memory) {
+        return abi.encodeWithSelector(IJsonApiAgent.fetchString.selector, url, jsonPath);
+    }
+
+    function encodeFetchBool(string memory url, string memory jsonPath) internal pure returns (bytes memory) {
+        return abi.encodeWithSelector(IJsonApiAgent.fetchBool.selector, url, jsonPath);
+    }
+
+    // --- LLM inference agent (experimental — verify ABI before mainnet) ------
+
+    /// @notice Classify / infer a string, optionally constrained to `allowedValues`
+    ///         (e.g. ["accept","reject"] for AI-judged task settlement).
+    function encodeInferString(string memory prompt, string memory system, bool cot, string[] memory allowedValues)
+        internal
+        pure
+        returns (bytes memory)
+    {
+        return abi.encodeWithSelector(ILlmAgent.inferString.selector, prompt, system, cot, allowedValues);
+    }
+
+    /// @notice Infer a bounded number (e.g. a 0–100 reputation/quality score).
+    function encodeInferNumber(string memory prompt, string memory system, int256 min, int256 max, bool cot)
+        internal
+        pure
+        returns (bytes memory)
+    {
+        return abi.encodeWithSelector(ILlmAgent.inferNumber.selector, prompt, system, min, max, cot);
+    }
+}
