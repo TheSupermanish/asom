@@ -121,6 +121,17 @@ export class AsomClient {
     return this.publicClient.getBalance({ address: getAddress(address) });
   }
 
+  /** How many agent NFTs an address owns. Lets callers find a free HD index
+   *  from chain state alone (recoverable from the seed, unlike local records). */
+  async agentCountOf(owner: Address): Promise<bigint> {
+    return this.publicClient.readContract({
+      address: this.addresses.agentNFT,
+      abi: agentNftAbi,
+      functionName: "balanceOf",
+      args: [getAddress(owner)],
+    });
+  }
+
   /**
    * Create an agent: mint the NFT, deploy its ERC-6551 wallet, register the name.
    * @param name   the agent name (validated on-chain: a-z, 0-9, hyphen; 1-32 chars)
@@ -163,6 +174,31 @@ export class AsomClient {
 
     const agent = await this.resolve(name);
     return { ...agent, txHash: hash };
+  }
+
+  /**
+   * Send native STT from the signer to any address.
+   * @param to   recipient (an agent's owner key for gas, or its wallet/TBA for funds)
+   * @param stt  amount as a decimal string, e.g. "0.01"
+   */
+  async send(to: Address, stt: string): Promise<Hash> {
+    if (!this.walletClient || !this.account) {
+      throw new Error("asom: send requires a privateKey");
+    }
+    const hash = await this.walletClient.sendTransaction({
+      to: getAddress(to),
+      value: parseEther(stt),
+      account: this.account,
+      chain: this.chain,
+      // Shannon inflates intrinsic gas: a plain transfer that's ~21k elsewhere
+      // OOG's well past 100k here. Pin generously — you only pay gas actually used.
+      gas: 500_000n,
+    });
+    const receipt = await this.publicClient.waitForTransactionReceipt({ hash });
+    if (receipt.status === "reverted") {
+      throw new Error(`asom: send to ${to} reverted (tx ${hash})`);
+    }
+    return hash;
   }
 
   /** Explorer URL for an address or tx hash. Empty string if the chain has no explorer. */
