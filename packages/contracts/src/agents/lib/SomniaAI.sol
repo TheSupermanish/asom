@@ -80,6 +80,10 @@ library SomniaAI {
     /// @param resolveUrl  true = domain-search mode (discover pages first); false = direct scrape
     /// @param numPages    pages to read (capped at 1 when resolveUrl == false)
     /// @param confidenceThreshold 0–100 confidence gate below which extraction fails
+    /// @dev numPages/confidenceThreshold are `uint8` to match the live agent's selector
+    ///      `ExtractString(string,string,string[],string,string,bool,uint8,uint8)` — confirmed
+    ///      against docs.somnia.network/agents/base-agents/llm-parse-website. A uint256 here
+    ///      would change the selector and the request would TimeOut against the real agent.
     function encodeExtractString(
         string memory key,
         string memory description,
@@ -87,8 +91,8 @@ library SomniaAI {
         string memory prompt,
         string memory url,
         bool resolveUrl,
-        uint256 numPages,
-        uint256 confidenceThreshold
+        uint8 numPages,
+        uint8 confidenceThreshold
     ) internal pure returns (bytes memory) {
         return abi.encodeWithSelector(
             IParseAgent.ExtractString.selector,
