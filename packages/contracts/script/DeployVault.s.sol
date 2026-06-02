@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import {Script, console2} from "forge-std/Script.sol";
 import {Vault} from "../src/tsugu/Vault.sol";
+import {DemoYieldStrategy} from "../src/tsugu/DemoYieldStrategy.sol";
 import {SomniaAgentIds} from "../src/agents/lib/SomniaAgents.sol";
 
 /// @notice Deploys Tsugu's Vault — the AI-verified conditional escrow built on
@@ -29,6 +30,8 @@ contract DeployVault is Script {
         uint256 llmId = vm.envOr("LLM_AGENT_ID", SomniaAgentIds.LLM_INFERENCE);
         uint256 sub = vm.envOr("SUBCOMMITTEE_SIZE", uint256(3));
         uint256 reward = vm.envOr("PER_AGENT_REWARD_WEI", uint256(0.1 ether));
+        // Optional: seed the demo yield reserve so opt-in pacts visibly accrue on testnet.
+        uint256 reserve = vm.envOr("YIELD_RESERVE_WEI", uint256(0));
 
         console2.log("== Tsugu :: DeployVault ==");
         console2.log("deployer ", vm.addr(pk));
@@ -39,12 +42,18 @@ contract DeployVault is Script {
 
         vm.startBroadcast(pk);
         Vault vault = new Vault(platform, parseId, jsonId, llmId, sub, reward);
+        // Yield venue: deploy the (testnet) strategy, bind it to the Vault, optionally
+        // seed its reserve. On mainnet, swap DemoYieldStrategy for a real adapter.
+        DemoYieldStrategy strat = new DemoYieldStrategy(address(vault));
+        vault.setYieldStrategy(address(strat));
+        if (reserve > 0) strat.fund{value: reserve}();
         vm.stopBroadcast();
 
         // NB: do NOT call vault.requiredDeposit() here — it reads the platform deposit
         // (precompile-backed) which reverts inside forge simulation. Query it live via
         // cast after deploy. Deposit = platform.getRequestDeposit() + reward * sub.
         console2.log("Vault           ", address(vault));
+        console2.log("YieldStrategy   ", address(strat));
         console2.log("subcommittee    ", sub);
         console2.log("perAgentReward  ", reward);
     }
