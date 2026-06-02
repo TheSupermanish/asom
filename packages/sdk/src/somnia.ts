@@ -5,13 +5,17 @@ import type { Address } from "viem";
  * offer as a capability. Same `agentId` on testnet and mainnet; only the platform
  * address differs. See repo docs/SOMNIA_AI.md.
  *
- * `verified` reflects whether the agent ID is confirmed on-chain. The LLM id is
- * currently UNVERIFIED — confirm against agents.somnia.network before relying on it.
+ * `status` reflects how confirmed each agent is — calling one with a wrong id OR a
+ * wrong payload selector burns the createRequest deposit (it just TimedOuts), so both
+ * axes matter:
+ *   - "verified"     id + ABI confirmed (jsonApi: exercised byte-identically by the live OracleAgent)
+ *   - "id-verified"  id confirmed on-chain, ABI/selectors per docs only — verify before relying on payloads
+ *   - "experimental" id itself unconfirmed — do not depend on without checking agents.somnia.network
  */
 export const somniaAgents = {
-  jsonApi: { id: 13174292974160097713n, verified: true, capability: "somnia.json-fetch" },
-  llmInference: { id: 12847293847561029384n, verified: false, capability: "somnia.llm-inference" },
-  parseWebsite: { id: 12875401142070969085n, verified: true, capability: "somnia.parse-website" },
+  jsonApi: { id: 13174292974160097713n, status: "verified", capability: "somnia.json-fetch" },
+  llmInference: { id: 12847293847561029384n, status: "experimental", capability: "somnia.llm-inference" },
+  parseWebsite: { id: 12875401142070969085n, status: "id-verified", capability: "somnia.parse-website" },
 } as const;
 
 /** Somnia Agents platform contract, by chain id. */

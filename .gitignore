@@ -18,8 +18,8 @@ build
 # foundry
 packages/contracts/out
 packages/contracts/cache
-packages/contracts/broadcast/**/dry-run
-packages/contracts/broadcast/**/*-latest.json
+# broadcast logs — deploy provenance lives in DEPLOYMENTS.md, not raw JSON
+packages/contracts/broadcast/
 
 # logs
 *.log
