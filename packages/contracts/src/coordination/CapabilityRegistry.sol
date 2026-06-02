@@ -17,6 +17,11 @@ import {AgentNFT} from "../identity/AgentNFT.sol";
 contract CapabilityRegistry {
     AgentNFT public immutable nft;
 
+    /// @notice Max capability tags one agent may advertise — bounds `capabilitiesOf`
+    ///         and the per-agent contribution to a tag's provider list, so a single
+    ///         agent can't self-inflate the discovery index into a gas-grief.
+    uint256 public constant MAX_TAGS = 64;
+
     // tokenId => its capability tags (enumerable set; _capPos is 1-based, 0 = absent)
     mapping(uint256 => bytes32[]) private _caps;
     mapping(uint256 => mapping(bytes32 => uint256)) private _capPos;
@@ -38,6 +43,7 @@ contract CapabilityRegistry {
     event ServiceUpdated(uint256 indexed tokenId, string serviceURI, uint256 pricePerCall);
 
     error NotAgentOwner(uint256 tokenId, address caller);
+    error TooManyCapabilities(uint256 tokenId);
 
     constructor(AgentNFT nft_) {
         nft = nft_;
@@ -51,11 +57,15 @@ contract CapabilityRegistry {
         _;
     }
 
-    /// @notice Advertise capabilities + service info in one call (idempotent on tags).
+    /// @notice Set an agent's full listing in one call: its capabilities become EXACTLY
+    ///         `tags` (any previously-advertised tag not in the set is dropped) and its
+    ///         service URI/price are replaced. Use add/removeCapability for incremental edits.
     function advertise(uint256 tokenId, bytes32[] calldata tags, string calldata serviceURI, uint256 pricePerCall)
         external
         onlyAgentOwner(tokenId)
     {
+        // Replace-semantics: the agent's capabilities become EXACTLY `tags`.
+        _clearCaps(tokenId);
         for (uint256 i = 0; i < tags.length; i++) {
             _addCap(tokenId, tags[i]);
         }
@@ -107,10 +117,35 @@ contract CapabilityRegistry {
         return _providers[tag].length;
     }
 
+    /// @notice A bounded slice of `tag`'s providers — `providers()` returns the full
+    ///         array, which is fine for small tags but can exceed an eth_call's
+    ///         response limit on a popular tag; page through with this for safety.
+    function providersPage(bytes32 tag, uint256 offset, uint256 limit) external view returns (uint256[] memory page) {
+        uint256[] storage all = _providers[tag];
+        uint256 n = all.length;
+        if (offset >= n) return new uint256[](0);
+        uint256 end = offset + limit;
+        if (end > n) end = n;
+        page = new uint256[](end - offset);
+        for (uint256 i = offset; i < end; i++) {
+            page[i - offset] = all[i];
+        }
+    }
+
     // --- internal enumerable-set ops -----------------------------------------
+
+    /// @dev Remove all of an agent's capabilities (bounded by MAX_TAGS). Pops from the
+    ///      end so each removal is a cheap no-swap pop of the agent's own tag list.
+    function _clearCaps(uint256 tokenId) internal {
+        bytes32[] storage tags = _caps[tokenId];
+        while (tags.length > 0) {
+            _removeCap(tokenId, tags[tags.length - 1]);
+        }
+    }
 
     function _addCap(uint256 tokenId, bytes32 tag) internal {
         if (_capPos[tokenId][tag] != 0) return; // already present — idempotent
+        if (_caps[tokenId].length >= MAX_TAGS) revert TooManyCapabilities(tokenId);
         _caps[tokenId].push(tag);
         _capPos[tokenId][tag] = _caps[tokenId].length;
         _providers[tag].push(tokenId);

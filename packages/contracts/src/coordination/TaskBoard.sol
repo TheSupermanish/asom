@@ -78,6 +78,7 @@ contract TaskBoard is ReentrancyGuard {
     error ReviewWindowOpen(uint256 taskId);
     error PayoutFailed();
     error RefundFailed();
+    error WorkerWalletNotDeployed();
 
     constructor(AgentNFT nft_, AgentRegistry registry_, CapabilityRegistry caps_) {
         nft = nft_;
@@ -176,6 +177,9 @@ contract TaskBoard is ReentrancyGuard {
     function _payout(uint256 taskId, Task storage t) internal {
         t.status = Status.Approved; // effects before interaction (also blocks re-entry to a 2nd payout)
         address wallet = registry.previewAccount(t.workerTokenId); // the agent's ERC-6551 wallet
+        // Defense-in-depth: register() always deploys the TBA, but never pay a
+        // counterfactual address that has no code (funds would be silently stranded).
+        if (wallet.code.length == 0) revert WorkerWalletNotDeployed();
         uint256 reward = t.reward;
         (bool ok,) = wallet.call{value: reward}("");
         if (!ok) revert PayoutFailed();

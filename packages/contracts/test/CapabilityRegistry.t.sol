@@ -145,6 +145,49 @@ contract CapabilityRegistryTest is Test {
         assertTrue(caps.hasCapability(aliceId, ORACLE));
     }
 
+    function test_advertise_replacesCapabilitySet() public {
+        bytes32[] memory first = new bytes32[](2);
+        first[0] = LLM;
+        first[1] = ORACLE;
+        vm.prank(alice);
+        caps.advertise(aliceId, first, "uri1", 0);
+
+        bytes32[] memory second = new bytes32[](2);
+        second[0] = ORACLE;
+        second[1] = TRANSLATE;
+        vm.prank(alice);
+        caps.advertise(aliceId, second, "uri2", 0);
+
+        assertFalse(caps.hasCapability(aliceId, LLM), "LLM dropped on re-advertise");
+        assertTrue(caps.hasCapability(aliceId, ORACLE));
+        assertTrue(caps.hasCapability(aliceId, TRANSLATE));
+        assertEq(caps.capabilitiesOf(aliceId).length, 2, "exactly the new set");
+        assertEq(caps.providerCount(LLM), 0, "dropped tag leaves the provider index");
+    }
+
+    function test_addCapability_enforcesMaxTags() public {
+        vm.startPrank(alice);
+        for (uint256 i = 0; i < caps.MAX_TAGS(); i++) {
+            caps.addCapability(aliceId, keccak256(abi.encode("cap", i)));
+        }
+        vm.expectRevert(abi.encodeWithSelector(CapabilityRegistry.TooManyCapabilities.selector, aliceId));
+        caps.addCapability(aliceId, keccak256("one-too-many"));
+        vm.stopPrank();
+        assertEq(caps.capabilitiesOf(aliceId).length, caps.MAX_TAGS());
+    }
+
+    function test_providersPage_slices() public {
+        vm.prank(alice);
+        caps.addCapability(aliceId, LLM);
+        vm.prank(bob);
+        caps.addCapability(bobId, LLM);
+
+        assertEq(caps.providersPage(LLM, 0, 10).length, 2, "full page");
+        assertEq(caps.providersPage(LLM, 0, 1).length, 1, "limited");
+        assertEq(caps.providersPage(LLM, 1, 10).length, 1, "offset");
+        assertEq(caps.providersPage(LLM, 5, 10).length, 0, "offset beyond end");
+    }
+
     function test_advertise_revertsForNonexistentToken() public {
         bytes32[] memory tags = new bytes32[](1);
         tags[0] = LLM;

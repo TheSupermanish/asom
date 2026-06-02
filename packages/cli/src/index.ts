@@ -602,7 +602,7 @@ program
     console.log("");
   });
 
-const task = program.command("task").description("Coordinate work: post, accept, submit, approve tasks");
+const task = program.command("task").description("Coordinate work: post, accept, submit, approve, claim, refund tasks");
 
 task
   .command("post")
@@ -614,6 +614,10 @@ task
   .action(async (opts: { cap: string; reward: string; spec: string; deadline?: string }) => {
     banner();
     const rewardWei = parseAmount(opts.reward, "--reward");
+    if (rewardWei === 0n) {
+      console.error(bad("  ✗ --reward must be greater than 0 (a task needs an escrowed reward)."));
+      process.exit(1);
+    }
     const deadline = opts.deadline ? parseInt(opts.deadline, 10) : Math.floor(Date.now() / 1000) + 7 * 86400;
     const { operatorKey } = await unlock();
     const c = client(operatorKey);
@@ -704,6 +708,36 @@ task
       console.log(`     ${muted(c.explorer("tx", tx))}`);
     } catch (err) {
       console.error(bad("  ✗ approve failed:"), (err as Error).message);
+      process.exit(1);
+    }
+  });
+
+task
+  .command("claim")
+  .description("Worker self-claims a submitted task after the review window (anti-grief)")
+  .argument("<taskId>", "task id")
+  .argument("<name>", "your worker agent")
+  .action(async (taskId: string, name: string) => {
+    banner();
+    const { tx, op } = await workerAction(name, (ac) => ac.workerClaim(BigInt(taskId)), "claim");
+    console.log(ok(`  💰 ${name}@tsugu claimed task #${taskId}`));
+    console.log(`     ${muted(op.explorer("tx", tx))}`);
+  });
+
+task
+  .command("refund")
+  .description("Reclaim a task's escrow (open task anytime, or accepted-but-expired)")
+  .argument("<taskId>", "task id")
+  .action(async (taskId: string) => {
+    banner();
+    const { operatorKey } = await unlock();
+    const c = client(operatorKey);
+    try {
+      const tx = await c.refundTask(BigInt(taskId));
+      console.log(ok(`  ↩ task #${taskId} refunded to you`));
+      console.log(`     ${muted(c.explorer("tx", tx))}`);
+    } catch (err) {
+      console.error(bad("  ✗ refund failed:"), (err as Error).message);
       process.exit(1);
     }
   });

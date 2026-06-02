@@ -473,11 +473,15 @@ export class TsuguClient {
     return a;
   }
 
-  private async finishWrite(request: unknown, label: string): Promise<Hash> {
+  private async finishWriteReceipt(request: unknown, label: string) {
     const hash = await this.walletClient!.writeContract(request as Parameters<WalletClient["writeContract"]>[0]);
     const receipt = await this.publicClient.waitForTransactionReceipt({ hash });
     if (receipt.status === "reverted") throw new Error(`tsugu: ${label} reverted (tx ${hash})`);
-    return hash;
+    return receipt;
+  }
+
+  private async finishWrite(request: unknown, label: string): Promise<Hash> {
+    return (await this.finishWriteReceipt(request, label)).transactionHash;
   }
 
   /** Advertise an agent's capabilities + service info in one call (owner-gated). */
@@ -588,12 +592,13 @@ export class TsuguClient {
       account,
       gas: GAS.coord,
     });
-    const txHash = await this.finishWrite(request, "postTask");
-    const receipt = await this.publicClient.getTransactionReceipt({ hash: txHash });
+    // Decode from the receipt we already waited on (no second fetch — a refetch can
+    // miss the just-mined receipt on a fallback/load-balanced RPC and lose the taskId).
+    const receipt = await this.finishWriteReceipt(request, "postTask");
     const events = parseEventLogs({ abi: taskBoardAbi, eventName: "TaskPosted", logs: receipt.logs });
     const ev = events.find((e) => getAddress(e.address) === getAddress(this.boardAddr()));
     if (!ev) throw new Error("tsugu: postTask landed but TaskPosted log was missing");
-    return { taskId: ev.args.taskId, txHash };
+    return { taskId: ev.args.taskId, txHash: receipt.transactionHash };
   }
 
   /** A capable agent (workerTokenId, owned by the signer) accepts a task. */
