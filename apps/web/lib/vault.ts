@@ -114,12 +114,15 @@ export const TONE_CLASS: Record<Tone, string> = {
 
 export const shortAddr = (a?: string) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : "");
 
-/** Format wei → STT with up to 4 significant decimals, trimmed. */
+/** Format wei → STT to 4 decimal places, trimmed. A nonzero amount below 0.0001
+ *  shows "<0.0001" rather than misleadingly rounding to "0". */
 export function fmtStt(wei: bigint): string {
+  if (wei === 0n) return "0";
   const s = formatEther(wei);
   if (!s.includes(".")) return s;
   const [i, d] = s.split(".");
   const dd = d.slice(0, 4).replace(/0+$/, "");
+  if (i === "0" && !dd) return "<0.0001";
   return dd ? `${i}.${dd}` : i;
 }
 

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { parseEther, zeroAddress } from "viem";
 import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
+import { shannon } from "@tsugu/sdk";
 import {
   vaultAbi,
   vaultAddress,
@@ -29,7 +30,8 @@ import { ConnectButton } from "@/components/ConnectButton";
 
 export default function PactPage({ params }: { params: { id: string } }) {
   const id = BigInt(params.id);
-  const { address, isConnected } = useAccount();
+  const { address, isConnected, chainId } = useAccount();
+  const wrongNetwork = isConnected && chainId !== undefined && chainId !== shannon.id;
 
   const pactQ = useReadContract({
     address: vaultAddress,
@@ -100,9 +102,19 @@ export default function PactPage({ params }: { params: { id: string } }) {
   const canExpire = active && now > Number(pact.deadline);
   const releaseAmt = pact.yieldOn ? ((yieldQ.data as bigint | undefined) ?? pact.escrow) : pact.escrow;
 
+  // Parse the fund amount once (null = empty or invalid) so the button can validate.
+  let fundWei: bigint | null;
+  try {
+    fundWei = amount.trim() ? parseEther(amount.trim()) : null;
+  } catch {
+    fundWei = null;
+  }
+
   const send = (functionName: string, args: unknown[], opts: { value?: bigint; gas: bigint }, label: string) => {
     setAction(label);
-    writeContract({ address: vaultAddress, abi: vaultAbi, functionName, args, ...opts } as never);
+    // chainId pins the write to Somnia: on the wrong network wagmi throws instead of
+    // silently dispatching to this address on another chain.
+    writeContract({ address: vaultAddress, abi: vaultAbi, functionName, args, chainId: shannon.id, ...opts } as never);
   };
 
   return (
@@ -177,6 +189,13 @@ export default function PactPage({ params }: { params: { id: string } }) {
 
       <Seam className="my-10" />
 
+      {wrongNetwork && (
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/40 bg-amber-500/5 p-4">
+          <span className="text-sm text-amber-200">You&apos;re on the wrong network — Tsugu lives on Somnia Shannon.</span>
+          <ConnectButton />
+        </div>
+      )}
+
       {/* Actions */}
       <div className="grid gap-5 sm:grid-cols-2">
         {/* Fund */}
@@ -185,18 +204,18 @@ export default function PactPage({ params }: { params: { id: string } }) {
             <h3 className="text-lg">Fund this pact</h3>
             <p className="mt-1 text-sm text-porcelain-dim">Escrowed safely. Released on proof, refundable if denied.</p>
             <div className="mt-4 flex gap-2">
-              <input value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.0" inputMode="decimal" className="input font-mono" />
+              <input
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                placeholder="0.0"
+                inputMode="decimal"
+                className={`input font-mono ${amount && fundWei === null ? "border-rust/60" : ""}`}
+              />
               {isConnected ? (
                 <button
                   className="btn-gold whitespace-nowrap"
-                  disabled={busy || !amount}
-                  onClick={() => {
-                    try {
-                      send("contribute", [id], { value: parseEther(amount), gas: GAS.contribute }, "fund");
-                    } catch {
-                      /* invalid amount */
-                    }
-                  }}
+                  disabled={busy || fundWei === null || wrongNetwork}
+                  onClick={() => fundWei !== null && send("contribute", [id], { value: fundWei, gas: GAS.contribute }, "fund")}
                 >
                   {action === "fund" && busy ? "Funding…" : "Fund"}
                 </button>
@@ -218,7 +237,7 @@ export default function PactPage({ params }: { params: { id: string } }) {
                   Releasable {new Date(releasableTs * 1000).toLocaleString()} (dispute window).
                 </p>
               ) : (
-                <button className="btn-gold mt-4" disabled={busy || !canRelease} onClick={() => send("release", [id], { gas: GAS.settle }, "release")}>
+                <button className="btn-gold mt-4" disabled={busy || !canRelease || wrongNetwork} onClick={() => send("release", [id], { gas: GAS.settle }, "release")}>
                   {action === "release" && busy
                     ? "Releasing…"
                     : `Release ${fmtStt(releaseAmt)} STT to beneficiary${pact.yieldOn ? " (principal + yield)" : ""}`}
@@ -230,7 +249,7 @@ export default function PactPage({ params }: { params: { id: string } }) {
             <>
               <p className="mt-1 text-sm text-porcelain-dim">{status === "Denied" ? "Quorum unreachable — contributors can refund." : "Expired undecided — contributors can refund."}</p>
               {canRefund ? (
-                <button className="btn-ghost mt-4" disabled={busy} onClick={() => send("refund", [id], { gas: GAS.settle }, "refund")}>
+                <button className="btn-ghost mt-4" disabled={busy || wrongNetwork} onClick={() => send("refund", [id], { gas: GAS.settle }, "refund")}>
                   {action === "refund" && busy ? "Refunding…" : `Refund my ${fmtStt(mine)} STT`}
                 </button>
               ) : (
@@ -243,7 +262,7 @@ export default function PactPage({ params }: { params: { id: string } }) {
             <p className="mt-1 text-sm text-porcelain-dim">
               {canExpire ? "Deadline passed." : "Verify the sources above to reach quorum."}
               {canExpire && (
-                <button className="btn-ghost ml-2 py-1 text-xs" disabled={busy} onClick={() => send("markExpired", [id], { gas: GAS.expire }, "expire")}>
+                <button className="btn-ghost ml-2 py-1 text-xs" disabled={busy || wrongNetwork} onClick={() => send("markExpired", [id], { gas: GAS.expire }, "expire")}>
                   Mark expired
                 </button>
               )}

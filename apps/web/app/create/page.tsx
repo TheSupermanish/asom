@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { parseEther, parseEventLogs } from "viem";
 import { useAccount, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
-import { PACT_KINDS, CLAIM_TYPES } from "@tsugu/sdk";
+import { PACT_KINDS, CLAIM_TYPES, shannon } from "@tsugu/sdk";
 import { vaultAbi, vaultAddress, GAS, KIND_META, CLAIM_META, type ClaimType } from "@/lib/vault";
 import { ConnectButton } from "@/components/ConnectButton";
 import { Seam } from "@/components/ui";
@@ -22,7 +22,8 @@ const blankCheck = (): CheckDraft => ({ claimType: "Web", source: "", jsonPath: 
 
 export default function CreatePact() {
   const router = useRouter();
-  const { isConnected } = useAccount();
+  const { isConnected, chainId } = useAccount();
+  const wrongNetwork = isConnected && chainId !== undefined && chainId !== shannon.id;
   const { writeContract, data: hash, isPending, error } = useWriteContract();
   const { data: receipt, isLoading: confirming } = useWaitForTransactionReceipt({ hash });
 
@@ -99,6 +100,7 @@ export default function CreatePact() {
       ],
       value: seedWei,
       gas: GAS.create,
+      chainId: shannon.id, // pin to Somnia — never dispatch createPact on the wrong chain
     });
   }
 
@@ -315,6 +317,11 @@ export default function CreatePact() {
             <div className="flex items-center gap-3">
               <ConnectButton />
               <span className="text-sm text-porcelain-dim">Connect your wallet to open a pact.</span>
+            </div>
+          ) : wrongNetwork ? (
+            <div className="flex items-center gap-3">
+              <ConnectButton />
+              <span className="text-sm text-amber-200">Switch to Somnia Shannon to open a pact.</span>
             </div>
           ) : (
             <button onClick={submit} disabled={!valid || busy || seedWei === null} className="btn-gold">
