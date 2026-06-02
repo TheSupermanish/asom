@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {IJsonApiAgent, ILlmAgent} from "./SomniaAgents.sol";
+import {IJsonApiAgent, ILlmAgent, IParseAgent} from "./SomniaAgents.sol";
 
 /// @title  SomniaAI — payload encoders for invoking Somnia's AI agents
 /// @notice The reusable toolkit for building "fundamental AI" on Somnia: pure helpers
@@ -66,5 +66,39 @@ library SomniaAI {
         returns (bytes memory)
     {
         return abi.encodeWithSelector(ILlmAgent.inferNumber.selector, prompt, system, min, max, cot);
+    }
+
+    // --- Parse-website agent (id-verified — verify ABI before mainnet) -------
+
+    /// @notice Extract a string from a web page via the parse-website agent.
+    /// @param key         the field name to extract (e.g. "headline")
+    /// @param description what the field means (helps the model)
+    /// @param options     optional enum of allowed answers ([] = unconstrained)
+    /// @param prompt      extraction instruction
+    /// @param url         page to read
+    /// @param resolveUrl  true = domain-search mode (discover pages first); false = direct scrape
+    /// @param numPages    pages to read (capped at 1 when resolveUrl == false)
+    /// @param confidenceThreshold 0–100 confidence gate below which extraction fails
+    function encodeExtractString(
+        string memory key,
+        string memory description,
+        string[] memory options,
+        string memory prompt,
+        string memory url,
+        bool resolveUrl,
+        uint256 numPages,
+        uint256 confidenceThreshold
+    ) internal pure returns (bytes memory) {
+        return abi.encodeWithSelector(
+            IParseAgent.ExtractString.selector,
+            key,
+            description,
+            options,
+            prompt,
+            url,
+            resolveUrl,
+            numPages,
+            confidenceThreshold
+        );
     }
 }
