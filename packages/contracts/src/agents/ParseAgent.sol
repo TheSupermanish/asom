@@ -30,8 +30,8 @@ contract ParseAgent is AgentCompute {
     /// @param prompt      extraction instruction
     /// @param url         page to read
     /// @param resolveUrl  true = domain-search mode; false = direct scrape (numPages → 1)
-    /// @param numPages    pages to read
-    /// @param confidenceThreshold 0–100 gate below which extraction fails
+    /// @param numPages    pages to read (uint8 — matches the agent's ExtractString selector)
+    /// @param confidenceThreshold 0–100 gate below which extraction fails (uint8)
     struct ExtractParams {
         string key;
         string description;
@@ -39,8 +39,8 @@ contract ParseAgent is AgentCompute {
         string prompt;
         string url;
         bool resolveUrl;
-        uint256 numPages;
-        uint256 confidenceThreshold;
+        uint8 numPages;
+        uint8 confidenceThreshold;
     }
 
     event ExtractionRequested(uint256 indexed requestId, string url, string key);

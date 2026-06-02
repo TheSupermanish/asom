@@ -76,7 +76,10 @@ interface ILlmAgent {
         returns (int256);
 }
 
-/// @dev Somnia "parse website" agent. Signatures per docs — verify before mainnet.
+/// @dev Somnia "parse website" agent. Signature confirmed against
+///      docs.somnia.network/agents/base-agents/llm-parse-website: numPages and
+///      confidenceThreshold are `uint8` (not uint256) — this is part of the function
+///      selector, so the width must match or the live agent never sees a valid call.
 interface IParseAgent {
     function ExtractString(
         string calldata key,
@@ -85,8 +88,8 @@ interface IParseAgent {
         string calldata prompt,
         string calldata url,
         bool resolveUrl,
-        uint256 numPages,
-        uint256 confidenceThreshold
+        uint8 numPages,
+        uint8 confidenceThreshold
     ) external returns (string memory);
 }
 
