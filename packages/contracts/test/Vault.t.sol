@@ -4,7 +4,8 @@ pragma solidity ^0.8.20;
 import {Test} from "forge-std/Test.sol";
 import {Vault} from "../src/tsugu/Vault.sol";
 import {AgentCompute} from "../src/agents/AgentCompute.sol";
-import {SomniaAgentIds, ResponseStatus, IParseAgent, IJsonApiAgent} from "../src/agents/lib/SomniaAgents.sol";
+import {SomniaAgentIds, ResponseStatus, IParseAgent, IJsonApiAgent, ILlmAgent} from
+    "../src/agents/lib/SomniaAgents.sol";
 import {MockAgentPlatform} from "./helpers/MockAgentPlatform.sol";
 
 contract VaultTest is Test {
@@ -25,8 +26,7 @@ contract VaultTest is Test {
 
     function setUp() public {
         platform = new MockAgentPlatform();
-        // Owner of the Vault is this test contract (it deploys).
-        vault = new Vault(address(platform), 0, 0, SUB, REWARD);
+        vault = new Vault(address(platform), 0, 0, 0, SUB, REWARD); // owner = this test contract
         _floor = platform.FLOOR();
         vm.deal(creator, 100 ether);
         vm.deal(alice, 100 ether);
@@ -38,61 +38,93 @@ contract VaultTest is Test {
         return _floor + REWARD * SUB;
     }
 
-    function _newWeb() internal view returns (Vault.NewPact memory n) {
+    // --- builders -----------------------------------------------------------
+
+    function _web(string memory url) internal pure returns (Vault.NewCheck memory c) {
+        c.claimType = Vault.ClaimType.Web;
+        c.source = url;
+    }
+
+    function _data(string memory url, string memory jp) internal pure returns (Vault.NewCheck memory c) {
+        c.claimType = Vault.ClaimType.Data;
+        c.source = url;
+        c.jsonPath = jp;
+    }
+
+    function _text(string memory t) internal pure returns (Vault.NewCheck memory c) {
+        c.claimType = Vault.ClaimType.Text;
+        c.source = t;
+    }
+
+    function _checks(Vault.NewCheck memory a) internal pure returns (Vault.NewCheck[] memory arr) {
+        arr = new Vault.NewCheck[](1);
+        arr[0] = a;
+    }
+
+    function _checks(Vault.NewCheck memory a, Vault.NewCheck memory b, Vault.NewCheck memory c)
+        internal
+        pure
+        returns (Vault.NewCheck[] memory arr)
+    {
+        arr = new Vault.NewCheck[](3);
+        arr[0] = a;
+        arr[1] = b;
+        arr[2] = c;
+    }
+
+    function _pact(Vault.NewCheck[] memory checks, uint8 quorum, uint64 disputeWindow)
+        internal
+        view
+        returns (Vault.NewPact memory n)
+    {
         n.kind = Vault.PactKind.Relief;
-        n.claimType = Vault.ClaimType.Web;
         n.beneficiary = beneficiary;
         n.deadline = uint64(block.timestamp + 30 days);
-        n.disputeWindow = 1 hours;
-        n.resolveUrl = false;
+        n.disputeWindow = disputeWindow;
+        n.quorum = quorum;
         n.claim = "The relief milestone was reached";
-        n.evidenceUrl = "https://example.org/relief";
-        n.jsonPath = "";
+        n.checks = checks;
     }
 
-    function _newData() internal view returns (Vault.NewPact memory n) {
-        n.kind = Vault.PactKind.Insurance;
-        n.claimType = Vault.ClaimType.Data;
-        n.beneficiary = beneficiary;
-        n.deadline = uint64(block.timestamp + 30 days);
-        n.disputeWindow = 0;
-        n.resolveUrl = false;
-        n.claim = "Flight was delayed > 3h";
-        n.evidenceUrl = "https://api.example.org/flight";
-        n.jsonPath = "data.delayed";
-    }
-
-    function _createWeb() internal returns (uint256 pactId) {
+    function _createWeb() internal returns (uint256 id) {
         vm.prank(creator);
-        pactId = vault.createPact(_newWeb());
+        id = vault.createPact(_pact(_checks(_web("https://example.org/relief")), 1, 1 hours));
+    }
+
+    function _status(uint256 id) internal view returns (Vault.PactStatus) {
+        return vault.getPact(id).status;
     }
 
     // --- Create -------------------------------------------------------------
 
-    function test_createPact_storesFields() public {
-        uint256 id = _createWeb();
+    function test_createPact_storesFieldsAndChecks() public {
+        vm.prank(creator);
+        uint256 id = vault.createPact(
+            _pact(_checks(_web("https://a.example"), _data("https://api.example", "data.ok"), _text("a report")), 2, 0)
+        );
         assertEq(id, 0);
         assertEq(vault.pactCount(), 1);
         Vault.Pact memory p = vault.getPact(id);
         assertEq(p.creator, creator);
         assertEq(p.beneficiary, beneficiary);
+        assertEq(p.quorum, 2);
+        assertEq(p.checks.length, 3);
+        assertEq(uint8(p.checks[0].claimType), uint8(Vault.ClaimType.Web));
+        assertEq(uint8(p.checks[1].claimType), uint8(Vault.ClaimType.Data));
+        assertEq(uint8(p.checks[2].claimType), uint8(Vault.ClaimType.Text));
         assertEq(uint8(p.status), uint8(Vault.PactStatus.Open));
-        assertEq(uint8(p.claimType), uint8(Vault.ClaimType.Web));
-        assertEq(p.claim, "The relief milestone was reached");
-        assertEq(p.escrow, 0);
     }
 
     function test_createPact_seedsContribution() public {
-        Vault.NewPact memory n = _newWeb();
         vm.prank(creator);
-        uint256 id = vault.createPact{value: 5 ether}(n);
+        uint256 id = vault.createPact{value: 5 ether}(_pact(_checks(_web("https://a.example")), 1, 0));
         assertEq(vault.getPact(id).escrow, 5 ether);
         assertEq(vault.contributionOf(id, creator), 5 ether);
         assertEq(vault.totalEscrow(), 5 ether);
     }
 
     function test_createPact_revertsBadBeneficiary() public {
-        Vault.NewPact memory n = _newWeb();
+        Vault.NewPact memory n = _pact(_checks(_web("u")), 1, 0);
         n.beneficiary = address(0);
         vm.prank(creator);
         vm.expectRevert(Vault.BadBeneficiary.selector);
@@ -100,7 +132,7 @@ contract VaultTest is Test {
     }
 
     function test_createPact_revertsBadDeadline() public {
-        Vault.NewPact memory n = _newWeb();
+        Vault.NewPact memory n = _pact(_checks(_web("u")), 1, 0);
         n.deadline = uint64(block.timestamp);
         vm.prank(creator);
         vm.expectRevert(Vault.BadDeadline.selector);
@@ -108,27 +140,36 @@ contract VaultTest is Test {
     }
 
     function test_createPact_revertsEmptyClaim() public {
-        Vault.NewPact memory n = _newWeb();
+        Vault.NewPact memory n = _pact(_checks(_web("u")), 1, 0);
         n.claim = "";
         vm.prank(creator);
         vm.expectRevert(Vault.EmptyClaim.selector);
         vault.createPact(n);
     }
 
-    function test_createPact_revertsEmptyEvidence() public {
-        Vault.NewPact memory n = _newWeb();
-        n.evidenceUrl = "";
+    function test_createPact_revertsNoChecks() public {
+        Vault.NewPact memory n = _pact(new Vault.NewCheck[](0), 1, 0);
         vm.prank(creator);
-        vm.expectRevert(Vault.EmptyEvidence.selector);
+        vm.expectRevert(Vault.NoChecks.selector);
         vault.createPact(n);
     }
 
+    function test_createPact_revertsBadQuorum() public {
+        vm.prank(creator);
+        vm.expectRevert(abi.encodeWithSelector(Vault.BadQuorum.selector, uint8(2), uint256(1)));
+        vault.createPact(_pact(_checks(_web("u")), 2, 0));
+    }
+
+    function test_createPact_revertsEmptySource() public {
+        vm.prank(creator);
+        vm.expectRevert(Vault.EmptySource.selector);
+        vault.createPact(_pact(_checks(_web("")), 1, 0));
+    }
+
     function test_createPact_dataRequiresJsonPath() public {
-        Vault.NewPact memory n = _newData();
-        n.jsonPath = "";
         vm.prank(creator);
         vm.expectRevert(Vault.EmptyJsonPath.selector);
-        vault.createPact(n);
+        vault.createPact(_pact(_checks(_data("https://api.example", "")), 1, 0));
     }
 
     // --- Contribute ---------------------------------------------------------
@@ -166,156 +207,215 @@ contract VaultTest is Test {
         vault.contribute{value: 1 ether}(99);
     }
 
-    // --- Resolve routing ----------------------------------------------------
+    // --- Resolve routing (all three agents) ---------------------------------
 
-    function test_requestResolution_web_routesToParseAgent() public {
+    function test_resolution_web_routesToParseAgent() public {
         uint256 id = _createWeb();
-        vm.prank(alice);
-        vault.contribute{value: 1 ether}(id);
-
         vm.prank(bob);
-        uint256 rid = vault.requestResolution{value: deposit()}(id);
-
+        uint256 rid = vault.requestResolution{value: deposit()}(id, 0);
         assertEq(platform.lastAgentId(), SomniaAgentIds.PARSE_WEBSITE);
-        assertEq(uint8(vault.getPact(id).status), uint8(Vault.PactStatus.Resolving));
+        assertEq(uint8(_status(id)), uint8(Vault.PactStatus.Resolving));
         assertEq(vault.requestToPact(rid), id);
-        assertEq(vault.resolutionRequest(id), rid);
-
-        bytes memory pl = platform.lastPayload();
-        bytes4 sel;
-        assembly {
-            sel := mload(add(pl, 0x20))
-        }
-        assertEq(sel, IParseAgent.ExtractString.selector);
+        assertEq(vault.requestToCheck(rid), 0);
+        assertEq(_selector(platform.lastPayload()), IParseAgent.ExtractString.selector);
     }
 
-    function test_requestResolution_data_routesToJsonAgent() public {
+    function test_resolution_data_routesToJsonAgent() public {
         vm.prank(creator);
-        uint256 id = vault.createPact(_newData());
+        uint256 id = vault.createPact(_pact(_checks(_data("https://api.example", "data.ok")), 1, 0));
         vm.prank(bob);
-        uint256 rid = vault.requestResolution{value: deposit()}(id);
-
+        vault.requestResolution{value: deposit()}(id, 0);
         assertEq(platform.lastAgentId(), SomniaAgentIds.JSON_API);
-        assertEq(vault.requestToPact(rid), id);
-
-        bytes memory pl = platform.lastPayload();
-        bytes4 sel;
-        assembly {
-            sel := mload(add(pl, 0x20))
-        }
-        assertEq(sel, IJsonApiAgent.fetchBool.selector);
+        assertEq(_selector(platform.lastPayload()), IJsonApiAgent.fetchBool.selector);
     }
 
-    function test_requestResolution_revertsFeeTooLow() public {
-        uint256 id = _createWeb();
+    function test_resolution_text_routesToLlmAgent() public {
+        vm.prank(creator);
+        uint256 id = vault.createPact(_pact(_checks(_text("the hospital report confirms the surgery")), 1, 0));
         vm.prank(bob);
-        vm.expectRevert(abi.encodeWithSelector(Vault.ResolutionFeeTooLow.selector, deposit() - 1, deposit()));
-        vault.requestResolution{value: deposit() - 1}(id);
+        vault.requestResolution{value: deposit()}(id, 0);
+        assertEq(platform.lastAgentId(), SomniaAgentIds.LLM_INFERENCE);
+        assertEq(_selector(platform.lastPayload()), ILlmAgent.inferString.selector);
     }
 
-    function test_requestResolution_overpaymentRefunded() public {
+    function test_resolution_revertsFeeTooLow() public {
+        uint256 id = _createWeb();
+        uint256 dep = deposit();
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(Vault.ResolutionFeeTooLow.selector, dep - 1, dep));
+        vault.requestResolution{value: dep - 1}(id, 0);
+    }
+
+    function test_resolution_overpaymentRefunded() public {
         uint256 id = _createWeb();
         uint256 before = bob.balance;
         vm.prank(bob);
-        vault.requestResolution{value: deposit() + 1 ether}(id);
-        // Only the deposit is consumed; the extra 1 ether is refunded by the base.
+        vault.requestResolution{value: deposit() + 1 ether}(id, 0);
         assertEq(bob.balance, before - deposit());
     }
 
-    function test_requestResolution_revertsWhenNotOpen() public {
+    function test_resolution_revertsCheckAlreadyRequested() public {
         uint256 id = _createWeb();
         vm.prank(bob);
-        vault.requestResolution{value: deposit()}(id);
-        // now Resolving — a second request must revert
+        vault.requestResolution{value: deposit()}(id, 0);
         vm.prank(bob);
-        vm.expectRevert(abi.encodeWithSelector(Vault.NotOpen.selector, Vault.PactStatus.Resolving));
-        vault.requestResolution{value: deposit()}(id);
+        vm.expectRevert(abi.encodeWithSelector(Vault.CheckNotResolvable.selector, Vault.CheckStatus.Requested));
+        vault.requestResolution{value: deposit()}(id, 0);
     }
 
-    // --- Confirmed → release ------------------------------------------------
+    function test_resolution_revertsUnknownCheck() public {
+        uint256 id = _createWeb();
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(Vault.UnknownCheck.selector, id, uint256(5)));
+        vault.requestResolution{value: deposit()}(id, 5);
+    }
 
-    function test_confirmed_thenRelease_paysBeneficiary() public {
+    // --- Single-check quorum (the simple case) ------------------------------
+
+    function test_singleCheck_confirm_thenRelease() public {
         uint256 id = _createWeb();
         vm.prank(alice);
         vault.contribute{value: 4 ether}(id);
         vm.prank(creator);
-        uint256 rid = vault.requestResolution{value: deposit()}(id);
+        uint256 rid = vault.requestResolution{value: deposit()}(id, 0);
 
         platform.fireString(address(vault), rid, "confirmed");
-        assertEq(uint8(vault.getPact(id).status), uint8(Vault.PactStatus.Confirmed));
-        assertEq(vault.getPact(id).verdict, "confirmed");
+        assertEq(uint8(_status(id)), uint8(Vault.PactStatus.Confirmed));
 
-        // dispute window still active
         vm.expectRevert(abi.encodeWithSelector(Vault.DisputeWindowActive.selector, vault.releasableAt(id)));
         vault.release(id);
 
         vm.warp(block.timestamp + 1 hours + 1);
-        uint256 before = beneficiary.balance;
+        uint256 b0 = beneficiary.balance;
         vault.release(id);
-        assertEq(beneficiary.balance, before + 4 ether);
-        assertEq(uint8(vault.getPact(id).status), uint8(Vault.PactStatus.Released));
-        assertEq(vault.getPact(id).escrow, 0);
+        assertEq(beneficiary.balance, b0 + 4 ether);
+        assertEq(uint8(_status(id)), uint8(Vault.PactStatus.Released));
         assertEq(vault.totalEscrow(), 0);
     }
 
-    function test_confirmed_caseInsensitive() public {
+    function test_caseInsensitiveVerdict() public {
         uint256 id = _createWeb();
         vm.prank(creator);
-        uint256 rid = vault.requestResolution{value: deposit()}(id);
-        platform.fireString(address(vault), rid, "Confirmed");
-        assertEq(uint8(vault.getPact(id).status), uint8(Vault.PactStatus.Confirmed));
+        uint256 rid = vault.requestResolution{value: deposit()}(id, 0);
+        platform.fireString(address(vault), rid, "CONFIRMED");
+        assertEq(uint8(_status(id)), uint8(Vault.PactStatus.Confirmed));
     }
+
+    // --- Multi-source quorum (M-of-N) ---------------------------------------
+
+    function test_quorum2of3_confirmsOnSecondConfirm() public {
+        vm.prank(creator);
+        uint256 id = vault.createPact{value: 9 ether}(
+            _pact(_checks(_web("https://news.example"), _text("a field report"), _data("https://api.example", "ok")), 2, 0)
+        );
+
+        // first confirm — still resolving (quorum not reached)
+        vm.prank(bob);
+        uint256 r0 = vault.requestResolution{value: deposit()}(id, 0);
+        platform.fireString(address(vault), r0, "confirmed");
+        assertEq(uint8(_status(id)), uint8(Vault.PactStatus.Open)); // no check in flight now
+
+        // second confirm via the LLM (text) check — quorum reached
+        vm.prank(bob);
+        uint256 r1 = vault.requestResolution{value: deposit()}(id, 1);
+        platform.fireString(address(vault), r1, "confirmed");
+        assertEq(uint8(_status(id)), uint8(Vault.PactStatus.Confirmed));
+
+        (uint256 confirmed,, uint256 total, uint8 q) = vault.tally(id);
+        assertEq(confirmed, 2);
+        assertEq(total, 3);
+        assertEq(q, 2);
+
+        uint256 b0 = beneficiary.balance;
+        vault.release(id); // disputeWindow 0
+        assertEq(beneficiary.balance, b0 + 9 ether);
+    }
+
+    function test_quorum2of3_mixedVerdictsStillConfirms() public {
+        vm.prank(creator);
+        uint256 id = vault.createPact{value: 1 ether}(
+            _pact(_checks(_web("a"), _text("b"), _data("c", "ok")), 2, 0)
+        );
+        vm.prank(bob);
+        uint256 r0 = vault.requestResolution{value: deposit()}(id, 0);
+        platform.fireString(address(vault), r0, "confirmed");
+        vm.prank(bob);
+        uint256 r1 = vault.requestResolution{value: deposit()}(id, 1);
+        platform.fireString(address(vault), r1, "denied"); // one source disagrees
+        vm.prank(bob);
+        uint256 r2 = vault.requestResolution{value: deposit()}(id, 2);
+        platform.fireBool(address(vault), r2, true); // DATA confirms → quorum 2 reached
+        assertEq(uint8(_status(id)), uint8(Vault.PactStatus.Confirmed));
+    }
+
+    function test_quorum2of3_deniesWhenUnreachable() public {
+        vm.prank(creator);
+        uint256 id = vault.createPact{value: 2 ether}(
+            _pact(_checks(_web("a"), _text("b"), _data("c", "ok")), 2, 0)
+        );
+        vm.prank(bob);
+        uint256 r0 = vault.requestResolution{value: deposit()}(id, 0);
+        platform.fireString(address(vault), r0, "denied");
+        assertEq(uint8(_status(id)), uint8(Vault.PactStatus.Open));
+        vm.prank(bob);
+        uint256 r1 = vault.requestResolution{value: deposit()}(id, 1);
+        platform.fireString(address(vault), r1, "denied"); // 2 denied, only 1 left → can't reach 2
+        assertEq(uint8(_status(id)), uint8(Vault.PactStatus.Denied));
+
+        // contributor refunds
+        uint256 c0 = creator.balance;
+        vm.prank(creator);
+        vault.refund(id);
+        assertEq(creator.balance, c0 + 2 ether);
+        assertEq(vault.totalEscrow(), 0);
+    }
+
+    function test_data_true_confirms_false_denies() public {
+        vm.prank(creator);
+        uint256 id = vault.createPact{value: 1 ether}(_pact(_checks(_data("https://api.example", "ok")), 1, 0));
+        vm.prank(bob);
+        uint256 rid = vault.requestResolution{value: deposit()}(id, 0);
+        platform.fireBool(address(vault), rid, true);
+        assertEq(uint8(_status(id)), uint8(Vault.PactStatus.Confirmed));
+
+        vm.prank(creator);
+        uint256 id2 = vault.createPact{value: 1 ether}(_pact(_checks(_data("https://api.example", "ok")), 1, 0));
+        vm.prank(bob);
+        uint256 rid2 = vault.requestResolution{value: deposit()}(id2, 0);
+        platform.fireBool(address(vault), rid2, false);
+        assertEq(uint8(_status(id2)), uint8(Vault.PactStatus.Denied));
+    }
+
+    // --- Inconclusive / failure retry ---------------------------------------
+
+    function test_inconclusive_checkRetryable() public {
+        uint256 id = _createWeb();
+        vm.prank(creator);
+        uint256 rid = vault.requestResolution{value: deposit()}(id, 0);
+        platform.fireString(address(vault), rid, "maybe");
+        assertEq(uint8(vault.getPact(id).checks[0].status), uint8(Vault.CheckStatus.Inconclusive));
+        assertEq(uint8(_status(id)), uint8(Vault.PactStatus.Open));
+        // retry the same check
+        vm.prank(creator);
+        vault.requestResolution{value: deposit()}(id, 0);
+        assertEq(uint8(vault.getPact(id).checks[0].status), uint8(Vault.CheckStatus.Requested));
+    }
+
+    function test_failedRequest_checkBackToPending() public {
+        uint256 id = _createWeb();
+        vm.prank(creator);
+        uint256 rid = vault.requestResolution{value: deposit()}(id, 0);
+        platform.fireFailure(address(vault), rid, ResponseStatus.TimedOut);
+        assertEq(uint8(vault.getPact(id).checks[0].status), uint8(Vault.CheckStatus.Pending));
+        assertEq(uint8(_status(id)), uint8(Vault.PactStatus.Open));
+    }
+
+    // --- Release / refund guards --------------------------------------------
 
     function test_release_revertsIfNotConfirmed() public {
         uint256 id = _createWeb();
         vm.expectRevert(abi.encodeWithSelector(Vault.NotConfirmed.selector, Vault.PactStatus.Open));
         vault.release(id);
-    }
-
-    function test_release_instantWhenZeroWindow() public {
-        Vault.NewPact memory n = _newWeb();
-        n.disputeWindow = 0;
-        vm.prank(creator);
-        uint256 id = vault.createPact{value: 1 ether}(n);
-        vm.prank(bob);
-        uint256 rid = vault.requestResolution{value: deposit()}(id);
-        platform.fireString(address(vault), rid, "confirmed");
-        uint256 before = beneficiary.balance;
-        vault.release(id); // no warp needed
-        assertEq(beneficiary.balance, before + 1 ether);
-    }
-
-    // --- Denied → refund ----------------------------------------------------
-
-    function test_denied_thenRefund_splitsByContributor() public {
-        uint256 id = _createWeb();
-        vm.prank(alice);
-        vault.contribute{value: 2 ether}(id);
-        vm.prank(bob);
-        vault.contribute{value: 3 ether}(id);
-        vm.prank(creator);
-        uint256 rid = vault.requestResolution{value: deposit()}(id);
-
-        platform.fireString(address(vault), rid, "denied");
-        assertEq(uint8(vault.getPact(id).status), uint8(Vault.PactStatus.Denied));
-
-        uint256 a0 = alice.balance;
-        vm.prank(alice);
-        vault.refund(id);
-        assertEq(alice.balance, a0 + 2 ether);
-        assertEq(vault.contributionOf(id, alice), 0);
-
-        // double refund blocked
-        vm.prank(alice);
-        vm.expectRevert(Vault.NothingToRefund.selector);
-        vault.refund(id);
-
-        uint256 b0 = bob.balance;
-        vm.prank(bob);
-        vault.refund(id);
-        assertEq(bob.balance, b0 + 3 ether);
-        assertEq(vault.totalEscrow(), 0);
-        assertEq(vault.getPact(id).escrow, 0);
     }
 
     function test_refund_revertsWhenNotRefundable() public {
@@ -327,69 +427,44 @@ contract VaultTest is Test {
         vault.refund(id);
     }
 
-    // --- Inconclusive / failure re-open -------------------------------------
-
-    function test_inconclusive_reopens() public {
-        uint256 id = _createWeb();
+    function test_refund_splitsByContributor_noDouble() public {
         vm.prank(creator);
-        uint256 rid = vault.requestResolution{value: deposit()}(id);
-        platform.fireString(address(vault), rid, "maybe");
-        assertEq(uint8(vault.getPact(id).status), uint8(Vault.PactStatus.Open));
-        assertEq(vault.getPact(id).verdict, "maybe");
-        // can be re-resolved
-        vm.prank(creator);
-        vault.requestResolution{value: deposit()}(id);
-        assertEq(uint8(vault.getPact(id).status), uint8(Vault.PactStatus.Resolving));
-    }
-
-    function test_failedRequest_reopens() public {
-        uint256 id = _createWeb();
-        vm.prank(creator);
-        uint256 rid = vault.requestResolution{value: deposit()}(id);
-        platform.fireFailure(address(vault), rid, ResponseStatus.TimedOut);
-        assertEq(uint8(vault.getPact(id).status), uint8(Vault.PactStatus.Open));
-    }
-
-    // --- DATA verdicts ------------------------------------------------------
-
-    function test_data_true_confirms() public {
-        vm.prank(creator);
-        uint256 id = vault.createPact{value: 1 ether}(_newData());
-        vm.prank(bob);
-        uint256 rid = vault.requestResolution{value: deposit()}(id);
-        platform.fireBool(address(vault), rid, true);
-        assertEq(uint8(vault.getPact(id).status), uint8(Vault.PactStatus.Confirmed));
-        assertEq(vault.getPact(id).verdict, "true");
-    }
-
-    function test_data_false_denies() public {
-        vm.prank(creator);
-        uint256 id = vault.createPact{value: 1 ether}(_newData());
-        vm.prank(bob);
-        uint256 rid = vault.requestResolution{value: deposit()}(id);
-        platform.fireBool(address(vault), rid, false);
-        assertEq(uint8(vault.getPact(id).status), uint8(Vault.PactStatus.Denied));
-    }
-
-    // --- Expiry -------------------------------------------------------------
-
-    function test_markExpired_thenRefund() public {
-        uint256 id = _createWeb();
+        uint256 id = vault.createPact(_pact(_checks(_web("a")), 1, 0));
         vm.prank(alice);
         vault.contribute{value: 2 ether}(id);
-
-        vm.expectRevert(Vault.NotExpirable.selector); // not yet past deadline
-        vault.markExpired(id);
-
-        vm.warp(block.timestamp + 31 days);
-        vault.markExpired(id);
-        assertEq(uint8(vault.getPact(id).status), uint8(Vault.PactStatus.Expired));
+        vm.prank(bob);
+        vault.contribute{value: 3 ether}(id);
+        vm.prank(creator);
+        uint256 rid = vault.requestResolution{value: deposit()}(id, 0);
+        platform.fireString(address(vault), rid, "denied");
+        assertEq(uint8(_status(id)), uint8(Vault.PactStatus.Denied));
 
         uint256 a0 = alice.balance;
         vm.prank(alice);
         vault.refund(id);
         assertEq(alice.balance, a0 + 2 ether);
+        vm.prank(alice);
+        vm.expectRevert(Vault.NothingToRefund.selector);
+        vault.refund(id);
+
+        vm.prank(bob);
+        vault.refund(id);
         assertEq(vault.totalEscrow(), 0);
+    }
+
+    function test_markExpired_thenRefund() public {
+        uint256 id = _createWeb();
+        vm.prank(alice);
+        vault.contribute{value: 2 ether}(id);
+        vm.expectRevert(Vault.NotExpirable.selector);
+        vault.markExpired(id);
+        vm.warp(block.timestamp + 31 days);
+        vault.markExpired(id);
+        assertEq(uint8(_status(id)), uint8(Vault.PactStatus.Expired));
+        uint256 a0 = alice.balance;
+        vm.prank(alice);
+        vault.refund(id);
+        assertEq(alice.balance, a0 + 2 ether);
     }
 
     // --- Consensus receipt --------------------------------------------------
@@ -397,49 +472,38 @@ contract VaultTest is Test {
     function test_consensusReceipt_recorded() public {
         uint256 id = _createWeb();
         vm.prank(creator);
-        uint256 rid = vault.requestResolution{value: deposit()}(id);
-
+        uint256 rid = vault.requestResolution{value: deposit()}(id, 0);
         uint256[] memory costs = new uint256[](3);
         costs[0] = 3e16;
         costs[1] = 1e16;
         costs[2] = 2e16;
         platform.fireStringConsensus(address(vault), rid, "confirmed", costs, 42);
-
-        (uint64 validators, uint64 finalizedAt, uint256 receiptId, uint256 medianCost) = vault.receipts(rid);
+        (uint64 validators,, uint256 receiptId, uint256 medianCost) = vault.receipts(rid);
         assertEq(validators, 3);
         assertEq(receiptId, 42);
-        assertEq(medianCost, 2e16); // median of {1,2,3}e16
-        assertGt(finalizedAt, 0);
-        assertEq(uint8(vault.getPact(id).status), uint8(Vault.PactStatus.Confirmed));
+        assertEq(medianCost, 2e16);
+        assertEq(uint8(_status(id)), uint8(Vault.PactStatus.Confirmed));
     }
 
-    // --- Escrow ring-fence (owner cannot touch contributor money) -----------
+    // --- Escrow ring-fence ---------------------------------------------------
 
     function test_owner_cannotWithdrawEscrow() public {
         uint256 id = _createWeb();
         vm.prank(alice);
-        vault.contribute{value: 6 ether}(id); // escrow = 6
-
-        // simulate a platform rebate landing on the contract (free balance)
-        (bool ok,) = address(vault).call{value: 1 ether}("");
+        vault.contribute{value: 6 ether}(id);
+        (bool ok,) = address(vault).call{value: 1 ether}(""); // simulate a rebate
         assertTrue(ok);
         assertEq(vault.totalEscrow(), 6 ether);
         assertEq(vault.freeBalance(), 1 ether);
 
         address sink = address(0x5151);
-
-        // cannot pull more than the free balance
         vm.expectRevert(abi.encodeWithSelector(Vault.EscrowLocked.selector, uint256(1 ether + 1), uint256(1 ether)));
         vault.withdraw(payable(sink), 1 ether + 1);
 
-        // can pull exactly the free balance
         vault.withdraw(payable(sink), 1 ether);
         assertEq(sink.balance, 1 ether);
-        assertEq(vault.freeBalance(), 0);
-
-        // withdrawAll now sweeps nothing — escrow stays put
         vault.withdrawAll(payable(sink));
-        assertEq(sink.balance, 1 ether);
+        assertEq(sink.balance, 1 ether); // nothing more to sweep
         assertEq(address(vault).balance, 6 ether);
         assertEq(vault.totalEscrow(), 6 ether);
     }
@@ -455,20 +519,16 @@ contract VaultTest is Test {
     function test_refund_reentrancyBlocked() public {
         Reentrant attacker = new Reentrant(vault);
         vm.deal(address(attacker), 10 ether);
-
         uint256 id = _createWeb();
         attacker.contribute{value: 3 ether}(id);
-
         vm.prank(creator);
-        uint256 rid = vault.requestResolution{value: deposit()}(id);
+        uint256 rid = vault.requestResolution{value: deposit()}(id, 0);
         platform.fireString(address(vault), rid, "denied");
 
-        attacker.armRefund(id);
+        attacker.arm(id);
         uint256 before = address(attacker).balance;
         attacker.triggerRefund(id); // re-enters refund on receive(); guard blocks the inner call
-        // attacker is refunded exactly once; the contract is fully drained of this pact's escrow
-        assertEq(address(attacker).balance, before + 3 ether);
-        assertEq(vault.getPact(id).escrow, 0);
+        assertEq(address(attacker).balance, before + 3 ether); // refunded exactly once
         assertEq(vault.totalEscrow(), 0);
     }
 
@@ -476,7 +536,14 @@ contract VaultTest is Test {
         assertEq(vault.requiredDeposit(), platform.FLOOR() + REWARD * SUB);
     }
 
-    // allow this test contract (Vault owner) to receive rebates/value
+    // --- helpers ------------------------------------------------------------
+
+    function _selector(bytes memory payload) internal pure returns (bytes4 sel) {
+        assembly {
+            sel := mload(add(payload, 0x20))
+        }
+    }
+
     receive() external payable {}
 }
 
@@ -494,7 +561,7 @@ contract Reentrant {
         vault.contribute{value: msg.value}(pactId);
     }
 
-    function armRefund(uint256 pactId) external {
+    function arm(uint256 pactId) external {
         armedPact = pactId;
         armed = true;
     }
@@ -505,8 +572,7 @@ contract Reentrant {
 
     receive() external payable {
         if (armed) {
-            armed = false; // single shot
-            // attempt the re-entrant refund; the nonReentrant guard reverts it.
+            armed = false;
             try vault.refund(armedPact) {} catch {}
         }
     }

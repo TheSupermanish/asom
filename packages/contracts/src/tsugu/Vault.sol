@@ -8,40 +8,45 @@ import {SomniaAgentIds, ResponseStatus} from "../agents/lib/SomniaAgents.sol";
 /// @title  Vault — Tsugu's AI-verified conditional escrow
 /// @notice Money that moves on proof, not promises. A **Pact** is a permissionless
 ///         escrow whose funds release to a beneficiary ONLY when a claim is proven
-///         true by Somnia's consensus AI — and refund to contributors when it is
-///         proven false. No middleman decides: the validator subcommittee fetches the
-///         real evidence, classifies it, and the verdict (plus its consensus receipt)
-///         is recorded on-chain for anyone to audit.
+///         true — and refund to contributors when it is proven false. No middleman
+///         decides: Somnia's consensus AI fetches the real evidence, classifies it,
+///         and records the verdict (with its consensus receipt) on-chain for anyone
+///         to audit.
+///
+///         Trust is not one call. A Pact verifies its claim against **N independent
+///         evidence checks** and releases only when a **quorum (M-of-N)** of them
+///         agree — corroboration across sources and across agents, not a single
+///         fetch that could be wrong or gamed. Each check picks the right Somnia
+///         agent for its evidence:
+///           - WEB  → parse-website agent `ExtractString(["confirmed","denied"])`:
+///                    one consensus call that reads the page AND classifies it.
+///           - DATA → JSON-API agent `fetchBool(url, jsonPath)`: a structured boolean
+///                    from a live endpoint.
+///           - TEXT → LLM-inference agent `inferString(["confirmed","denied"])`:
+///                    consensus reasoning over a pasted statement / evidence — no URL.
 ///
 ///         The kintsugi soul: something breaks (trust in online giving), Tsugu mends
-///         it, and the proof is the gold in the seam.
+///         it, and the corroborated proof is the gold in the seam.
 ///
 /// @dev    `Vault is AgentCompute`: it inherits the hardened request/callback/funding
 ///         pattern (deposit math, platform-gated callback, status-checked decode,
-///         consensus receipts) and adds the escrow state machine on top. One resolver
-///         serves every PactKind — `kind` is framing for humans, not a code path:
-///           - WEB  claim → parse-website agent `ExtractString(options=["confirmed",
-///                          "denied"])`: one consensus call that fetches the real page
-///                          AND classifies it against the claim.
-///           - DATA claim → JSON-API agent `fetchBool(url, jsonPath)`: a structured
-///                          boolean from a live endpoint.
+///         consensus receipts) and adds the escrow + quorum state machine on top.
 ///
 ///         MONEY SAFETY (this contract custodies third-party funds — reviewed
 ///         adversarially):
 ///           1. Escrow is ring-fenced. `totalEscrow` tracks every wei owed to pacts;
 ///              the owner's inherited {withdraw}/{withdrawAll} are overridden to sweep
 ///              only the free (rebate/top-up) balance — never escrow.
-///           2. Resolution is caller-paid. `requestResolution` requires
-///              `msg.value >= requiredDeposit()` from everyone (no owner exemption), so
-///              the AI deposit forwarded to the platform is always covered by new money
-///              and the escrow balance is never tapped to pay for compute.
+///           2. Resolution is per-check and caller-paid. Each `requestResolution`
+///              requires `msg.value >= requiredDeposit()` (no owner exemption), so the
+///              AI deposit forwarded to the platform is always covered by new money and
+///              escrow is never tapped to pay for compute. (One request per tx keeps
+///              the base `_dispatch` overpayment refund correct.)
 ///           3. Every value-moving path (release, refund) is `nonReentrant` and follows
-///              checks-effects-interactions: state is finalised before the transfer.
-///              `requestResolution` does NOT add its own guard — it calls the base
-///              `_dispatch`, which is already `nonReentrant`.
+///              checks-effects-interactions. `requestResolution` does NOT add its own
+///              guard — it calls the base `_dispatch`, which is already `nonReentrant`.
 contract Vault is AgentCompute {
-    /// @notice Human-facing framing for a pact. Does NOT change the resolver — every
-    ///         kind is verified by the same consensus call.
+    /// @notice Human-facing framing for a pact. Does NOT change the resolver.
     enum PactKind {
         Relief, // disaster donations released when the event is AI-confirmed
         Medical, // a patient's fund released against verified hospital reports
@@ -51,73 +56,94 @@ contract Vault is AgentCompute {
 
     }
 
-    /// @notice How the claim is proven. Selects the Somnia agent + payload.
+    /// @notice Which Somnia AI agent verifies a given check.
     enum ClaimType {
-        Web, // parse-website agent: read `evidenceUrl`, classify against the claim
-        Data // JSON-API agent: fetch a boolean at `jsonPath` from `evidenceUrl`
+        Web, // parse-website agent: read `source` (a URL), classify against the claim
+        Data, // JSON-API agent: fetch a boolean at `jsonPath` from `source` (a URL)
+        Text // LLM-inference agent: reason over the claim + `source` (evidence text)
 
     }
 
-    /// @notice Pact lifecycle.
-    /// @dev    Open ──contribute──▶ Open
-    ///         Open ──requestResolution──▶ Resolving
-    ///         Resolving ──confirmed──▶ Confirmed ──(dispute window)──▶ release ──▶ Released
-    ///         Resolving ──denied──▶ Denied ──contributors refund──▶ (escrow drains)
-    ///         Resolving ──inconclusive/failed──▶ Open (retryable)
-    ///         Open ──deadline passes──▶ Expired ──contributors refund──▶ (escrow drains)
-    enum PactStatus {
-        Open,
-        Resolving,
+    /// @notice Per-check outcome. Inconclusive checks can be re-requested.
+    enum CheckStatus {
+        Pending, // not yet dispatched
+        Requested, // dispatched, awaiting the consensus callback
         Confirmed,
         Denied,
-        Released,
-        Expired
+        Inconclusive // a fuzzy answer — retryable, never releases funds
+
+    }
+
+    /// @notice Pact lifecycle (driven by the quorum tally over its checks).
+    enum PactStatus {
+        Open, // accepting contributions; no check in flight yet
+        Resolving, // at least one check dispatched, quorum not yet decided
+        Confirmed, // >= quorum checks confirmed; releasable after the dispute window
+        Denied, // quorum became unreachable; contributors can refund
+        Released, // escrow paid to the beneficiary
+        Expired // deadline passed undecided; contributors can refund
+
+    }
+
+    /// @notice One independent piece of evidence and its consensus verdict.
+    struct Check {
+        ClaimType claimType;
+        bool resolveUrl; // WEB: true = domain-search the page first; false = direct scrape
+        string source; // WEB/DATA: the URL; TEXT: the evidence/statement to reason over
+        string jsonPath; // DATA: dot-path to the boolean (ignored otherwise)
+        CheckStatus status;
+        uint256 requestId; // the platform request (look up `consensusOf` with it)
+        string answer; // raw AI answer once resolved
     }
 
     /// @notice A unit of trust-minimised funding.
-    /// @dev    `escrow` is the live balance still held for this pact (drops to 0 once
-    ///         released or fully refunded). Strings live in the struct so a single
-    ///         `getPact` read returns everything a UI needs.
     struct Pact {
         address creator;
         address beneficiary;
         PactKind kind;
-        ClaimType claimType;
         PactStatus status;
-        bool resolveUrl; // WEB: true = domain-search the page first; false = direct scrape
+        uint8 quorum; // # of checks that must Confirm for the pact to Confirm
         uint64 deadline; // claim must be proven by here; after, contributors can refund
-        uint64 confirmedAt; // when the "confirmed" verdict landed (starts the dispute window)
+        uint64 confirmedAt; // when quorum was reached (starts the dispute window)
         uint64 disputeWindow; // seconds after confirmedAt before release is allowed (0 = instant)
         uint256 escrow; // wei currently held for this pact
-        string claim; // the human claim / extraction prompt the AI must verify
-        string evidenceUrl; // WEB: page to read; DATA: JSON endpoint
-        string jsonPath; // DATA: dot-path to the boolean (ignored for WEB)
-        string verdict; // raw AI answer once resolved ("confirmed"/"denied"/"true"/"false")
+        string claim; // the human claim every check verifies
+        Check[] checks; // 1..MAX_CHECKS independent evidence sources
+    }
+
+    /// @notice One evidence source for {createPact} (the on-chain verdict fields are
+    ///         filled by the resolver, so they're not part of the input).
+    struct NewCheck {
+        ClaimType claimType;
+        bool resolveUrl;
+        string source;
+        string jsonPath;
     }
 
     /// @notice Parameters for {createPact}, bundled to dodge stack-too-deep (via_ir off).
     struct NewPact {
         PactKind kind;
-        ClaimType claimType;
         address beneficiary;
         uint64 deadline;
         uint64 disputeWindow;
-        bool resolveUrl;
+        uint8 quorum;
         string claim;
-        string evidenceUrl;
-        string jsonPath;
+        NewCheck[] checks;
     }
 
-    /// @notice Somnia agent ids for the two resolver paths (defaulted to the canonical
+    /// @notice Somnia agent ids for the three resolver paths (defaulted to the canonical
     ///         ids when constructed with 0).
     uint256 public immutable parseAgentId;
     uint256 public immutable jsonAgentId;
+    uint256 public immutable llmAgentId;
 
     /// @notice Confidence gate (0–100) handed to the parse agent; extraction below this
-    ///         fails rather than guessing. Pages backing a clear claim score well above.
+    ///         fails rather than guessing.
     uint8 public constant PARSE_CONFIDENCE = 50;
 
-    /// @notice All pacts, indexed by id (= array position).
+    /// @notice Upper bound on evidence checks per pact — caps the quorum-tally loop.
+    uint8 public constant MAX_CHECKS = 8;
+
     Pact[] internal pacts;
 
     /// @notice Sum of every pact's live escrow. The owner can never withdraw below this.
@@ -126,26 +152,29 @@ contract Vault is AgentCompute {
     /// @notice pactId → contributor → wei contributed (the refundable ledger).
     mapping(uint256 => mapping(address => uint256)) public contributions;
 
-    /// @notice requestId → pactId, set when a resolution is dispatched so the platform
-    ///         callback (`_onResult`) knows which pact a verdict belongs to.
+    /// @notice requestId → pactId and → check index, set when a check is dispatched so
+    ///         the platform callback (`_onResult`) knows which check a verdict belongs to.
     mapping(uint256 => uint256) public requestToPact;
-
-    /// @notice pactId → its latest resolution requestId (look up `consensusOf` with it).
-    mapping(uint256 => uint256) public resolutionRequest;
+    mapping(uint256 => uint256) public requestToCheck;
 
     event PactCreated(
         uint256 indexed pactId,
         address indexed creator,
         address indexed beneficiary,
         PactKind kind,
-        ClaimType claimType,
+        uint8 quorum,
+        uint8 checkCount,
         uint64 deadline
     );
     event PactContributed(uint256 indexed pactId, address indexed contributor, uint256 amount, uint256 newEscrow);
-    event PactResolutionRequested(uint256 indexed pactId, uint256 indexed requestId, ClaimType claimType);
-    event PactConfirmed(uint256 indexed pactId, uint256 indexed requestId, string verdict, uint64 releasableAt);
-    event PactDenied(uint256 indexed pactId, uint256 indexed requestId, string verdict);
-    event PactInconclusive(uint256 indexed pactId, uint256 indexed requestId, string rawVerdict);
+    event PactResolutionRequested(
+        uint256 indexed pactId, uint256 indexed requestId, uint256 checkIndex, ClaimType claimType
+    );
+    event CheckResolved(
+        uint256 indexed pactId, uint256 checkIndex, uint256 indexed requestId, string answer, CheckStatus status
+    );
+    event PactConfirmed(uint256 indexed pactId, uint256 indexed requestId, uint256 confirmedChecks, uint64 releasableAt);
+    event PactDenied(uint256 indexed pactId, uint256 indexed requestId, uint256 confirmedChecks, uint256 deniedChecks);
     event PactResolutionFailed(uint256 indexed pactId, uint256 indexed requestId, ResponseStatus status);
     event PactReleased(uint256 indexed pactId, address indexed beneficiary, uint256 amount);
     event PactRefunded(uint256 indexed pactId, address indexed contributor, uint256 amount);
@@ -154,11 +183,17 @@ contract Vault is AgentCompute {
     error BadBeneficiary();
     error BadDeadline();
     error EmptyClaim();
-    error EmptyEvidence();
+    error NoChecks();
+    error TooManyChecks(uint256 given, uint256 max);
+    error BadQuorum(uint8 quorum, uint256 checkCount);
+    error EmptySource();
     error EmptyJsonPath();
     error UnknownPact(uint256 pactId);
-    error NotOpen(PactStatus status);
+    error UnknownCheck(uint256 pactId, uint256 checkIndex);
+    error PactNotActive(PactStatus status);
+    error CheckNotResolvable(CheckStatus status);
     error DeadlinePassed();
+    error NotOpenForContribution(PactStatus status);
     error NothingContributed();
     error ResolutionFeeTooLow(uint256 sent, uint256 required);
     error NotConfirmed(PactStatus status);
@@ -174,54 +209,71 @@ contract Vault is AgentCompute {
     /// @param platform_         Somnia Agents platform (createRequest/handleResponse).
     /// @param parseAgentId_     parse-website agent id (0 → canonical PARSE_WEBSITE).
     /// @param jsonAgentId_      JSON-API agent id (0 → canonical JSON_API).
+    /// @param llmAgentId_       LLM-inference agent id (0 → canonical LLM_INFERENCE).
     /// @param subcommitteeSize_ validators per request (deposit = floor + reward × size).
-    /// @param perAgentReward_   per-validator reward in wei.
+    /// @param perAgentReward_   per-validator reward in wei (set high enough for the
+    ///                          priciest path — the parse agent — so runners don't skip).
     constructor(
         address platform_,
         uint256 parseAgentId_,
         uint256 jsonAgentId_,
+        uint256 llmAgentId_,
         uint256 subcommitteeSize_,
         uint256 perAgentReward_
     ) AgentCompute(platform_, subcommitteeSize_, perAgentReward_) {
         parseAgentId = parseAgentId_ == 0 ? SomniaAgentIds.PARSE_WEBSITE : parseAgentId_;
         jsonAgentId = jsonAgentId_ == 0 ? SomniaAgentIds.JSON_API : jsonAgentId_;
+        llmAgentId = llmAgentId_ == 0 ? SomniaAgentIds.LLM_INFERENCE : llmAgentId_;
     }
 
     // --- Create & fund ------------------------------------------------------
 
-    /// @notice Open a pact. Permissionless. Optionally seed it by sending value (counts
-    ///         as the creator's first contribution).
+    /// @notice Open a pact with one or more evidence checks. Permissionless. Optionally
+    ///         seed it by sending value (counts as the creator's first contribution).
     /// @return pactId index of the new pact.
     function createPact(NewPact calldata n) external payable returns (uint256 pactId) {
         if (n.beneficiary == address(0)) revert BadBeneficiary();
         if (n.deadline <= block.timestamp) revert BadDeadline();
         if (bytes(n.claim).length == 0) revert EmptyClaim();
-        if (bytes(n.evidenceUrl).length == 0) revert EmptyEvidence();
-        if (n.claimType == ClaimType.Data && bytes(n.jsonPath).length == 0) revert EmptyJsonPath();
+        uint256 k = n.checks.length;
+        if (k == 0) revert NoChecks();
+        if (k > MAX_CHECKS) revert TooManyChecks(k, MAX_CHECKS);
+        if (n.quorum == 0 || n.quorum > k) revert BadQuorum(n.quorum, k);
 
         pactId = pacts.length;
         Pact storage p = pacts.push();
         p.creator = msg.sender;
         p.beneficiary = n.beneficiary;
         p.kind = n.kind;
-        p.claimType = n.claimType;
         p.status = PactStatus.Open;
-        p.resolveUrl = n.resolveUrl;
+        p.quorum = n.quorum;
         p.deadline = n.deadline;
         p.disputeWindow = n.disputeWindow;
         p.claim = n.claim;
-        p.evidenceUrl = n.evidenceUrl;
-        p.jsonPath = n.jsonPath;
 
-        emit PactCreated(pactId, msg.sender, n.beneficiary, n.kind, n.claimType, n.deadline);
+        for (uint256 i; i < k; i++) {
+            NewCheck calldata nc = n.checks[i];
+            if (bytes(nc.source).length == 0) revert EmptySource();
+            if (nc.claimType == ClaimType.Data && bytes(nc.jsonPath).length == 0) revert EmptyJsonPath();
+            Check storage c = p.checks.push();
+            c.claimType = nc.claimType;
+            c.resolveUrl = nc.resolveUrl;
+            c.source = nc.source;
+            c.jsonPath = nc.jsonPath;
+            c.status = CheckStatus.Pending;
+        }
+
+        emit PactCreated(pactId, msg.sender, n.beneficiary, n.kind, n.quorum, uint8(k), n.deadline);
 
         if (msg.value > 0) _contribute(p, pactId, msg.value);
     }
 
-    /// @notice Add funds to a pact's escrow while it is Open and before its deadline.
+    /// @notice Add funds to a pact's escrow while it is still active and before deadline.
     function contribute(uint256 pactId) external payable {
         Pact storage p = _pact(pactId);
-        if (p.status != PactStatus.Open) revert NotOpen(p.status);
+        if (p.status != PactStatus.Open && p.status != PactStatus.Resolving) {
+            revert NotOpenForContribution(p.status);
+        }
         if (block.timestamp > p.deadline) revert DeadlinePassed();
         if (msg.value == 0) revert NothingContributed();
         _contribute(p, pactId, msg.value);
@@ -236,91 +288,136 @@ contract Vault is AgentCompute {
 
     // --- Resolve ------------------------------------------------------------
 
-    /// @notice Pay the consensus AI to verify the claim. Permissionless and caller-paid:
-    ///         forward `msg.value >= requiredDeposit()`. The verdict arrives later via
-    ///         the platform callback. Overpayment is refunded by the base `_dispatch`.
+    /// @notice Pay the consensus AI to verify ONE evidence check. Permissionless and
+    ///         caller-paid: forward `msg.value >= requiredDeposit()`. Resolve several
+    ///         checks (in any order, by anyone) to corroborate the claim; the pact
+    ///         confirms once a quorum agree. The verdict arrives later via the platform
+    ///         callback; overpayment is refunded by the base `_dispatch`.
     /// @dev    Not `nonReentrant` here — `_dispatch` already holds the guard.
-    /// @return requestId the dispatched platform request (also stored in resolutionRequest).
-    function requestResolution(uint256 pactId) external payable returns (uint256 requestId) {
+    /// @return requestId the dispatched platform request.
+    function requestResolution(uint256 pactId, uint256 checkIndex) external payable returns (uint256 requestId) {
         Pact storage p = _pact(pactId);
-        if (p.status != PactStatus.Open) revert NotOpen(p.status);
+        if (p.status != PactStatus.Open && p.status != PactStatus.Resolving) revert PactNotActive(p.status);
         if (block.timestamp > p.deadline) revert DeadlinePassed();
+        if (checkIndex >= p.checks.length) revert UnknownCheck(pactId, checkIndex);
+
+        Check storage c = p.checks[checkIndex];
+        if (c.status != CheckStatus.Pending && c.status != CheckStatus.Inconclusive) {
+            revert CheckNotResolvable(c.status);
+        }
 
         uint256 dep = requiredDeposit();
         if (msg.value < dep) revert ResolutionFeeTooLow(msg.value, dep);
 
-        if (p.claimType == ClaimType.Web) {
-            string[] memory options = new string[](2);
-            options[0] = "confirmed";
-            options[1] = "denied";
+        requestId = _dispatchCheck(p.claim, c);
+
+        c.status = CheckStatus.Requested;
+        c.requestId = requestId;
+        requestToPact[requestId] = pactId;
+        requestToCheck[requestId] = checkIndex;
+        if (p.status == PactStatus.Open) p.status = PactStatus.Resolving;
+        emit PactResolutionRequested(pactId, requestId, checkIndex, c.claimType);
+    }
+
+    /// @dev Encode the right payload for a check's claim type and dispatch it.
+    function _dispatchCheck(string storage claim, Check storage c) private returns (uint256 requestId) {
+        if (c.claimType == ClaimType.Web) {
             bytes memory payload = SomniaAI.encodeExtractString(
                 "verdict",
                 "whether the claim is confirmed or denied by the evidence on this page",
-                options,
-                p.claim,
-                p.evidenceUrl,
-                p.resolveUrl,
-                p.resolveUrl ? uint8(3) : uint8(1),
+                _verdictOptions(),
+                claim,
+                c.source,
+                c.resolveUrl,
+                c.resolveUrl ? uint8(3) : uint8(1),
                 PARSE_CONFIDENCE
             );
             requestId = _dispatch(parseAgentId, payload);
-        } else {
-            bytes memory payload = SomniaAI.encodeFetchBool(p.evidenceUrl, p.jsonPath);
+        } else if (c.claimType == ClaimType.Data) {
+            bytes memory payload = SomniaAI.encodeFetchBool(c.source, c.jsonPath);
             requestId = _dispatch(jsonAgentId, payload);
+        } else {
+            string memory prompt = string.concat(
+                "Claim to verify: ", claim, "\n\nEvidence:\n", c.source, "\n\nIs the claim supported by the evidence?"
+            );
+            bytes memory payload = SomniaAI.encodeInferString(
+                prompt,
+                "You verify whether a funding claim is supported by the supplied evidence. Answer with exactly one of the allowed values.",
+                true,
+                _verdictOptions()
+            );
+            requestId = _dispatch(llmAgentId, payload);
         }
-
-        requestToPact[requestId] = pactId;
-        resolutionRequest[pactId] = requestId;
-        p.status = PactStatus.Resolving;
-        emit PactResolutionRequested(pactId, requestId, p.claimType);
     }
 
-    /// @notice Decode the consensus verdict and move the pact. Called by the base from
-    ///         `handleResponse` after the consensus receipt is already recorded — so by
-    ///         the time this runs, `consensusOf(requestId)` is populated.
+    /// @notice Decode a check's consensus verdict and re-tally the pact. Called by the
+    ///         base from `handleResponse` after the consensus receipt is recorded — so
+    ///         `consensusOf(requestId)` is already populated when this runs.
     function _onResult(uint256 requestId, bytes memory result) internal override {
         uint256 pactId = requestToPact[requestId];
-        Pact storage p = pacts[pactId];
-        if (p.status != PactStatus.Resolving) return; // defensive: ignore stray callbacks
+        uint256 ci = requestToCheck[requestId];
+        Check storage c = pacts[pactId].checks[ci];
+        if (c.status != CheckStatus.Requested) return; // defensive: ignore stray callbacks
 
-        bool confirmed;
-        bool inconclusive;
-        string memory verdict;
-
-        if (p.claimType == ClaimType.Web) {
-            verdict = abi.decode(result, (string));
-            bytes32 h = keccak256(bytes(_toLower(verdict)));
-            if (h == keccak256("confirmed")) confirmed = true;
-            else if (h == keccak256("denied")) confirmed = false;
-            else inconclusive = true; // a fuzzy answer must never release funds
-        } else {
+        string memory answer;
+        CheckStatus outcome;
+        if (c.claimType == ClaimType.Data) {
             bool v = abi.decode(result, (bool));
-            confirmed = v;
-            verdict = v ? "true" : "false";
+            answer = v ? "true" : "false";
+            outcome = v ? CheckStatus.Confirmed : CheckStatus.Denied;
+        } else {
+            answer = abi.decode(result, (string));
+            bytes32 h = keccak256(bytes(_toLower(answer)));
+            if (h == keccak256("confirmed")) outcome = CheckStatus.Confirmed;
+            else if (h == keccak256("denied")) outcome = CheckStatus.Denied;
+            else outcome = CheckStatus.Inconclusive; // a fuzzy answer must never release funds
         }
 
-        p.verdict = verdict;
+        c.answer = answer;
+        c.status = outcome;
+        emit CheckResolved(pactId, ci, requestId, answer, outcome);
+        _evaluate(pactId, requestId);
+    }
 
-        if (inconclusive) {
-            p.status = PactStatus.Open; // back to Open: a clearer re-resolution can be paid for
-            emit PactInconclusive(pactId, requestId, verdict);
-        } else if (confirmed) {
+    /// @notice A Failed/TimedOut check returns to Pending so it can be retried.
+    function _onFailed(uint256 requestId, ResponseStatus status) internal override {
+        uint256 pactId = requestToPact[requestId];
+        uint256 ci = requestToCheck[requestId];
+        Check storage c = pacts[pactId].checks[ci];
+        if (c.status == CheckStatus.Requested) c.status = CheckStatus.Pending;
+        emit PactResolutionFailed(pactId, requestId, status);
+        _evaluate(pactId, requestId);
+    }
+
+    /// @dev Re-tally a pact after a check changes. Confirm at quorum; deny once quorum
+    ///      is unreachable; otherwise Resolving (a check in flight) or back to Open.
+    function _evaluate(uint256 pactId, uint256 requestId) private {
+        Pact storage p = pacts[pactId];
+        if (p.status == PactStatus.Confirmed || p.status == PactStatus.Denied) return; // terminal verdict locked
+
+        uint256 n = p.checks.length;
+        uint256 confirmed;
+        uint256 denied;
+        uint256 inflight;
+        for (uint256 i; i < n; i++) {
+            CheckStatus s = p.checks[i].status;
+            if (s == CheckStatus.Confirmed) confirmed++;
+            else if (s == CheckStatus.Denied) denied++;
+            else if (s == CheckStatus.Requested) inflight++;
+        }
+
+        if (confirmed >= p.quorum) {
             p.status = PactStatus.Confirmed;
             p.confirmedAt = uint64(block.timestamp);
             uint64 releaseAt = uint64(block.timestamp + p.disputeWindow);
-            emit PactConfirmed(pactId, requestId, verdict, releaseAt);
-        } else {
+            emit PactConfirmed(pactId, requestId, confirmed, releaseAt);
+        } else if (denied > n - p.quorum) {
+            // even if every remaining check confirmed, quorum is now impossible
             p.status = PactStatus.Denied;
-            emit PactDenied(pactId, requestId, verdict);
+            emit PactDenied(pactId, requestId, confirmed, denied);
+        } else {
+            p.status = inflight > 0 ? PactStatus.Resolving : PactStatus.Open;
         }
-    }
-
-    /// @notice A Failed/TimedOut request re-opens the pact so resolution can be retried.
-    function _onFailed(uint256 requestId, ResponseStatus status) internal override {
-        uint256 pactId = requestToPact[requestId];
-        Pact storage p = pacts[pactId];
-        if (p.status == PactStatus.Resolving) p.status = PactStatus.Open;
-        emit PactResolutionFailed(pactId, requestId, status);
     }
 
     // --- Settle -------------------------------------------------------------
@@ -330,13 +427,12 @@ contract Vault is AgentCompute {
     function release(uint256 pactId) external nonReentrant {
         Pact storage p = _pact(pactId);
         if (p.status != PactStatus.Confirmed) revert NotConfirmed(p.status);
-        uint64 releasableAt = uint64(uint256(p.confirmedAt) + uint256(p.disputeWindow));
-        if (block.timestamp < releasableAt) revert DisputeWindowActive(releasableAt);
+        uint64 releasableTs = uint64(uint256(p.confirmedAt) + uint256(p.disputeWindow));
+        if (block.timestamp < releasableTs) revert DisputeWindowActive(releasableTs);
 
         uint256 amount = p.escrow;
         if (amount == 0) revert EmptyEscrow();
 
-        // Effects before interaction.
         p.escrow = 0;
         totalEscrow -= amount;
         p.status = PactStatus.Released;
@@ -356,7 +452,6 @@ contract Vault is AgentCompute {
         uint256 amount = contributions[pactId][msg.sender];
         if (amount == 0) revert NothingToRefund();
 
-        // Effects before interaction.
         contributions[pactId][msg.sender] = 0;
         p.escrow -= amount;
         totalEscrow -= amount;
@@ -366,11 +461,11 @@ contract Vault is AgentCompute {
         emit PactRefunded(pactId, msg.sender, amount);
     }
 
-    /// @notice Mark an Open pact Expired once its deadline has passed without a
-    ///         confirmed verdict, unlocking refunds. Permissionless.
+    /// @notice Mark an undecided pact Expired once its deadline has passed, unlocking
+    ///         refunds. Permissionless.
     function markExpired(uint256 pactId) external {
         Pact storage p = _pact(pactId);
-        if (p.status != PactStatus.Open) revert NotExpirable();
+        if (p.status != PactStatus.Open && p.status != PactStatus.Resolving) revert NotExpirable();
         if (block.timestamp <= p.deadline) revert NotExpirable();
         p.status = PactStatus.Expired;
         emit PactExpired(pactId);
@@ -379,7 +474,7 @@ contract Vault is AgentCompute {
     // --- Owner withdrawal (escrow-protected) --------------------------------
 
     /// @notice Free balance the owner may withdraw: total balance minus ring-fenced
-    ///         escrow. This is rebate dust and any owner top-ups — never contributor money.
+    ///         escrow. This is rebate dust / owner top-ups — never contributor money.
     function freeBalance() public view returns (uint256) {
         uint256 bal = address(this).balance;
         return bal > totalEscrow ? bal - totalEscrow : 0;
@@ -413,9 +508,30 @@ contract Vault is AgentCompute {
         return pacts.length;
     }
 
-    /// @notice Full pact record (strings included) for a UI/indexer.
+    /// @notice Full pact record (claim + all checks) for a UI/indexer.
     function getPact(uint256 pactId) external view returns (Pact memory) {
         return _pact(pactId);
+    }
+
+    /// @notice The checks of a pact (verdicts included).
+    function getChecks(uint256 pactId) external view returns (Check[] memory) {
+        return _pact(pactId).checks;
+    }
+
+    /// @notice Confirmed-check tally for a pact (for progress UIs): (confirmed, denied, total, quorum).
+    function tally(uint256 pactId)
+        external
+        view
+        returns (uint256 confirmed, uint256 denied, uint256 total, uint8 quorum)
+    {
+        Pact storage p = _pact(pactId);
+        total = p.checks.length;
+        quorum = p.quorum;
+        for (uint256 i; i < total; i++) {
+            CheckStatus s = p.checks[i].status;
+            if (s == CheckStatus.Confirmed) confirmed++;
+            else if (s == CheckStatus.Denied) denied++;
+        }
     }
 
     /// @notice The caller-or-other's refundable contribution to a pact.
@@ -437,7 +553,13 @@ contract Vault is AgentCompute {
         return pacts[pactId];
     }
 
-    /// @dev ASCII lower-case, so a "Confirmed"/"DENIED" answer is read the same as the
+    function _verdictOptions() private pure returns (string[] memory options) {
+        options = new string[](2);
+        options[0] = "confirmed";
+        options[1] = "denied";
+    }
+
+    /// @dev ASCII lower-case, so a "Confirmed"/"DENIED" answer reads the same as the
     ///      lower-case options the agent was constrained to.
     function _toLower(string memory s) internal pure returns (string memory) {
         bytes memory b = bytes(s);

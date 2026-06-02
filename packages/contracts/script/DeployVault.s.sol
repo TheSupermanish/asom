@@ -13,6 +13,7 @@ import {SomniaAgentIds} from "../src/agents/lib/SomniaAgents.sol";
 ///         - SOMNIA_AGENTS_PLATFORM (default Shannon platform 0x037B…6776)
 ///         - PARSE_AGENT_ID         (default SomniaAgentIds.PARSE_WEBSITE)
 ///         - JSON_API_AGENT_ID      (default SomniaAgentIds.JSON_API)
+///         - LLM_AGENT_ID           (default SomniaAgentIds.LLM_INFERENCE)
 ///         - SUBCOMMITTEE_SIZE      (default 3)
 ///         - PER_AGENT_REWARD_WEI   (wei, default 0.1 ether — covers the parse path)
 ///         Shannon: broadcast with a high --gas-estimate-multiplier (the estimator
@@ -25,6 +26,7 @@ contract DeployVault is Script {
         address platform = vm.envOr("SOMNIA_AGENTS_PLATFORM", SomniaAgentIds.PLATFORM_TESTNET);
         uint256 parseId = vm.envOr("PARSE_AGENT_ID", SomniaAgentIds.PARSE_WEBSITE);
         uint256 jsonId = vm.envOr("JSON_API_AGENT_ID", SomniaAgentIds.JSON_API);
+        uint256 llmId = vm.envOr("LLM_AGENT_ID", SomniaAgentIds.LLM_INFERENCE);
         uint256 sub = vm.envOr("SUBCOMMITTEE_SIZE", uint256(3));
         uint256 reward = vm.envOr("PER_AGENT_REWARD_WEI", uint256(0.1 ether));
 
@@ -33,12 +35,17 @@ contract DeployVault is Script {
         console2.log("platform ", platform);
         console2.log("parseId  ", parseId);
         console2.log("jsonId   ", jsonId);
+        console2.log("llmId    ", llmId);
 
         vm.startBroadcast(pk);
-        Vault vault = new Vault(platform, parseId, jsonId, sub, reward);
+        Vault vault = new Vault(platform, parseId, jsonId, llmId, sub, reward);
         vm.stopBroadcast();
 
+        // NB: do NOT call vault.requiredDeposit() here — it reads the platform deposit
+        // (precompile-backed) which reverts inside forge simulation. Query it live via
+        // cast after deploy. Deposit = platform.getRequestDeposit() + reward * sub.
         console2.log("Vault           ", address(vault));
-        console2.log("requiredDeposit ", vault.requiredDeposit());
+        console2.log("subcommittee    ", sub);
+        console2.log("perAgentReward  ", reward);
     }
 }
