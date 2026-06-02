@@ -4,8 +4,13 @@ pragma solidity ^0.8.20;
 import {Test} from "forge-std/Test.sol";
 import {Vault} from "../src/tsugu/Vault.sol";
 import {AgentCompute} from "../src/agents/AgentCompute.sol";
-import {SomniaAgentIds, ResponseStatus, IParseAgent, IJsonApiAgent, ILlmAgent} from
-    "../src/agents/lib/SomniaAgents.sol";
+import {
+    SomniaAgentIds,
+    ResponseStatus,
+    IParseAgent,
+    IJsonApiAgent,
+    ILlmAgent
+} from "../src/agents/lib/SomniaAgents.sol";
 import {MockAgentPlatform} from "./helpers/MockAgentPlatform.sol";
 
 contract VaultTest is Test {
@@ -316,7 +321,9 @@ contract VaultTest is Test {
     function test_quorum2of3_confirmsOnSecondConfirm() public {
         vm.prank(creator);
         uint256 id = vault.createPact{value: 9 ether}(
-            _pact(_checks(_web("https://news.example"), _text("a field report"), _data("https://api.example", "ok")), 2, 0)
+            _pact(
+                _checks(_web("https://news.example"), _text("a field report"), _data("https://api.example", "ok")), 2, 0
+            )
         );
 
         // first confirm — still resolving (quorum not reached)
@@ -343,9 +350,7 @@ contract VaultTest is Test {
 
     function test_quorum2of3_mixedVerdictsStillConfirms() public {
         vm.prank(creator);
-        uint256 id = vault.createPact{value: 1 ether}(
-            _pact(_checks(_web("a"), _text("b"), _data("c", "ok")), 2, 0)
-        );
+        uint256 id = vault.createPact{value: 1 ether}(_pact(_checks(_web("a"), _text("b"), _data("c", "ok")), 2, 0));
         vm.prank(bob);
         uint256 r0 = vault.requestResolution{value: deposit()}(id, 0);
         platform.fireString(address(vault), r0, "confirmed");
@@ -360,9 +365,7 @@ contract VaultTest is Test {
 
     function test_quorum2of3_deniesWhenUnreachable() public {
         vm.prank(creator);
-        uint256 id = vault.createPact{value: 2 ether}(
-            _pact(_checks(_web("a"), _text("b"), _data("c", "ok")), 2, 0)
-        );
+        uint256 id = vault.createPact{value: 2 ether}(_pact(_checks(_web("a"), _text("b"), _data("c", "ok")), 2, 0));
         vm.prank(bob);
         uint256 r0 = vault.requestResolution{value: deposit()}(id, 0);
         platform.fireString(address(vault), r0, "denied");
