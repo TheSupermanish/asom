@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Address } from "viem";
 import { ASOM_HOME } from "./keystore.js";
@@ -33,6 +33,12 @@ export function agentPath(name: string): string {
 export function saveAgent(file: AgentFile): void {
   if (!existsSync(AGENTS_DIR)) mkdirSync(AGENTS_DIR, { recursive: true, mode: 0o700 });
   writeFileSync(agentPath(file.name), JSON.stringify(file, null, 2) + "\n", { mode: 0o644 });
+}
+
+/** Remove a local agent record (e.g. after transferring it away). No-op if absent. */
+export function removeAgent(name: string): void {
+  const path = agentPath(name);
+  if (existsSync(path)) rmSync(path);
 }
 
 export function readAgent(name: string): AgentFile | null {
