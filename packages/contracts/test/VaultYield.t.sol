@@ -211,5 +211,15 @@ contract VaultYieldTest is Test {
         assertEq(vault.outstandingShares(), 0);
     }
 
+    function test_fund_revertsOnEmptyPool() public {
+        // Funding an empty pool would orphan the reserve and haircut the next depositor.
+        vm.expectRevert(DemoYieldStrategy.NoSharesToFund.selector);
+        strat.fund{value: 1 ether}();
+        // After a deposit exists, accrual is allowed.
+        vm.prank(creator);
+        vault.createPact{value: 1 ether}(_yieldPact(1));
+        strat.fund{value: 1 ether}(); // operator = this test contract
+    }
+
     receive() external payable {}
 }

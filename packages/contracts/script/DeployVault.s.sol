@@ -30,8 +30,6 @@ contract DeployVault is Script {
         uint256 llmId = vm.envOr("LLM_AGENT_ID", SomniaAgentIds.LLM_INFERENCE);
         uint256 sub = vm.envOr("SUBCOMMITTEE_SIZE", uint256(3));
         uint256 reward = vm.envOr("PER_AGENT_REWARD_WEI", uint256(0.1 ether));
-        // Optional: seed the demo yield reserve so opt-in pacts visibly accrue on testnet.
-        uint256 reserve = vm.envOr("YIELD_RESERVE_WEI", uint256(0));
 
         console2.log("== Tsugu :: DeployVault ==");
         console2.log("deployer ", vm.addr(pk));
@@ -46,7 +44,8 @@ contract DeployVault is Script {
         // seed its reserve. On mainnet, swap DemoYieldStrategy for a real adapter.
         DemoYieldStrategy strat = new DemoYieldStrategy(address(vault));
         vault.setYieldStrategy(address(strat));
-        if (reserve > 0) strat.fund{value: reserve}();
+        // NB: the yield reserve is funded by the operator AFTER the first yield deposit
+        // (fund() rejects an empty pool), so there is no pre-funding step at deploy.
         vm.stopBroadcast();
 
         // NB: do NOT call vault.requiredDeposit() here — it reads the platform deposit
