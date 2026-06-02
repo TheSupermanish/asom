@@ -18,8 +18,9 @@ import {IJsonApiAgent, ILlmAgent, IParseAgent} from "./SomniaAgents.sol";
 ///         Keeping the encoding in one audited place means every asom agent speaks to the
 ///         platform identically, and a capability tag (e.g. "somnia.json-fetch") maps to a
 ///         concrete (agentId, encoder) pair. See repo docs/SOMNIA_AI.md.
-/// @dev    JSON encoders are against the verified agent ABI. LLM encoders are per the docs
-///         and marked experimental — confirm the live agent ABI/ID before mainnet.
+/// @dev    JSON + LLM inferString encoders are against ABIs confirmed on Somnia's live
+///         infra (OracleAgent / the official agents console). inferNumber + parse-website
+///         encoders are per docs — confirm in a live round before mainnet.
 library SomniaAI {
     // --- JSON API agent (verified) -------------------------------------------
 
@@ -47,7 +48,7 @@ library SomniaAI {
         return abi.encodeWithSelector(IJsonApiAgent.fetchBool.selector, url, jsonPath);
     }
 
-    // --- LLM inference agent (experimental — verify ABI before mainnet) ------
+    // --- LLM inference agent (id + inferString ABI confirmed on Somnia console) ------
 
     /// @notice Classify / infer a string, optionally constrained to `allowedValues`
     ///         (e.g. ["accept","reject"] for AI-judged task settlement).

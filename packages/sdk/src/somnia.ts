@@ -14,7 +14,11 @@ import type { Address } from "viem";
  */
 export const somniaAgents = {
   jsonApi: { id: 13174292974160097713n, status: "verified", capability: "somnia.json-fetch" },
-  llmInference: { id: 12847293847561029384n, status: "experimental", capability: "somnia.llm-inference" },
+  // Somnia's base LLM agent. id + inferString ABI confirmed on the official console
+  // (agents.somnia.network → LLM Inference: same id, signature
+  // `inferString(string,string,bool,string[])`, 0.24 SOMI deposit). Our LlmAgent wraps it.
+  // Stays "id-verified" until we exercise it in a live Shannon round (then → "verified").
+  llmInference: { id: 12847293847561029384n, status: "id-verified", capability: "somnia.llm-inference" },
   parseWebsite: { id: 12875401142070969085n, status: "id-verified", capability: "somnia.parse-website" },
 } as const;
 

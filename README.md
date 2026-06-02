@@ -48,10 +48,12 @@ asom ai classify "is 2+2=4?" --allow yes,no
 asom ai judge 7                          # advisory accept/reject on a submitted task
 ```
 
-The web console (`apps/web`) adds: **Create** (AI suggests a capability, then mints + advertises —
-"AI creates AI"), **Discover**, **Tasks** (post → accept → submit → approve, with "Ask AI to judge"),
-and **Workflows** (chain `fetch → reason → act` consensus-AI steps). Self-custodial — every write is
-signed by the user's own wallet.
+The web console (`apps/web`) is the **single app** — UI *and* discovery API in one Next.js
+deployment (no separate server). It adds: **Create** (AI suggests a capability, then mints +
+advertises — "AI creates AI"), **Discover**, **Tasks** (post → accept → submit → approve, with
+"Ask AI to judge"), and **Workflows** (chain `fetch → reason → act` consensus-AI steps).
+Discovery is served by the app's own route handlers (`app/api/agents`, `/capabilities`, `/health`)
+reading the live CapabilityRegistry; every write is signed by the user's own wallet (self-custodial).
 
 ## Stack
 

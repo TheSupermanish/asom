@@ -12,10 +12,10 @@ import {SomniaAgentIds} from "./lib/SomniaAgents.sol";
 ///         a bounded number (e.g. a 0–100 quality score). Results are consensus-verified
 ///         off-EVM and delivered to `handleResponse` in a later block.
 /// @dev    Built on the audited `AgentCompute` base (deposit math, the four callback
-///         guards, refund, reentrancy, receive()). The LLM agent id is marked
-///         EXPERIMENTAL (see SomniaAgents.sol / docs/SOMNIA_AI.md): if the live id/ABI
-///         is wrong the request degrades to TimedOut (handled by `_onFailed`) — it
-///         never corrupts stored state.
+///         guards, refund, reentrancy, receive()). The LLM agent id + inferString ABI
+///         are confirmed on the official Somnia console (see SomniaAgents.sol /
+///         docs/SOMNIA_AI.md); should any live id/ABI ever drift, the request degrades
+///         to TimedOut (handled by `_onFailed`) — it never corrupts stored state.
 contract LlmAgent is AgentCompute {
     /// @notice The Somnia agent id this contract calls (default LLM_INFERENCE).
     uint256 public immutable agentId;
