@@ -17,9 +17,14 @@ const TTL_MS = Number(process.env.DISCOVER_TTL_MS ?? 30_000);
 let _client: AsomClient | null = null;
 let _directory: AgentDirectory | null = null;
 
-function client(): AsomClient {
+/** The shared read-only AsomClient (public RPC, no signer) reused across requests. */
+export function serverClient(): AsomClient {
   if (!_client) _client = new AsomClient({ rpcUrls: [RPC] });
   return _client;
+}
+
+function client(): AsomClient {
+  return serverClient();
 }
 
 /** The shared, TTL-cached agent directory (lazily built on first request). */

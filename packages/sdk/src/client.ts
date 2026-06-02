@@ -771,6 +771,29 @@ export class AsomClient {
     };
   }
 
+  /** The id the next posted task will get — i.e. (tasks posted so far) + 1. Enumerate
+   *  the board with `getTask(1..nextTaskId()-1)`. */
+  async nextTaskId(): Promise<bigint> {
+    return this.publicClient.readContract({
+      address: this.boardAddr(),
+      abi: taskBoardAbi,
+      functionName: "nextTaskId",
+    });
+  }
+
+  /** An agent's ERC-6551 wallet address from its tokenId (deterministic; the same
+   *  address `register` deployed). Lets a caller detect that a task's `poster` IS an
+   *  agent's wallet — i.e. an agent that hired another agent. */
+  async agentWallet(tokenId: bigint): Promise<Address> {
+    const wallet = await this.publicClient.readContract({
+      address: this.addresses.agentRegistry,
+      abi: agentRegistryAbi,
+      functionName: "previewAccount",
+      args: [tokenId],
+    });
+    return getAddress(wallet);
+  }
+
   // --- AI compute (LlmAgent / ParseAgent — the fundamental Somnia AI primitives) ---
 
   private llmAddr(): Address {
@@ -989,12 +1012,13 @@ export class AsomClient {
         const known = Object.values(somniaAgents);
         return await Promise.all(
           ids.map(async (id) => {
-            const [, metadataJsonUri, tarUri] = await this.publicClient.readContract({
+            const agent = await this.publicClient.readContract({
               address: registry,
               abi: somniaAgentRegistryAbi,
               functionName: "getAgent",
               args: [id],
             });
+            const { metadataJsonUri, tarUri } = agent;
             const match = known.find((a) => a.id === id);
             return {
               id,
