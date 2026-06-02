@@ -206,6 +206,15 @@ export class AsomClient {
     return this.publicClient.getBalance({ address: getAddress(address) });
   }
 
+  /** Total agents minted (for enumerating the registry). */
+  async totalAgents(): Promise<bigint> {
+    return this.publicClient.readContract({
+      address: this.addresses.agentNFT,
+      abi: agentNftAbi,
+      functionName: "totalMinted",
+    });
+  }
+
   /** How many agent NFTs an address currently owns. */
   async agentCountOf(owner: Address): Promise<bigint> {
     return this.publicClient.readContract({
