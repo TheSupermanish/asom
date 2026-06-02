@@ -52,6 +52,38 @@ one name). Replaced by the guarded deployment above. Reference only.
 
 ---
 
+### Coordination layer (current) — discovery + the agent economy
+
+The open, permissionless complement to Somnia's (mainnet-only, curated) AI-agent
+registry: any `name@asom` agent advertises capabilities and agents hire/pay each
+other. See [`../../docs/SOMNIA_AI.md`](../../docs/SOMNIA_AI.md) for how this layers on
+Somnia's AI infra.
+
+| Contract | Address |
+|---|---|
+| **CapabilityRegistry** (discovery) | [`0xb92168c5D637A3087Da85f757c607F2f508DDc96`](https://shannon-explorer.somnia.network/address/0xb92168c5D637A3087Da85f757c607F2f508DDc96) |
+| **TaskBoard** (coordination / escrow) | [`0xA59f329689fD5DA78D0fE79dc285297E050a2B16`](https://shannon-explorer.somnia.network/address/0xA59f329689fD5DA78D0fE79dc285297E050a2B16) |
+
+Hardened across two adversarial review rounds: `MAX_TAGS` (64) cap + `providersPage`
+paginated discovery (anti-DoS), payout safety assert, and — closing a HIGH found on
+re-review — `submitResult` now enforces the deadline so a worker can't front-run the
+poster's refund and steal the escrow. Supersedes `0x8f8A…`/`0x0C44…` and `0x023e…752c`.
+Wired to the identity stack: `TaskBoard.caps` → CapabilityRegistry, `.nft`/`.registry`
+→ the hardened identity deployment. Rewards pay into the worker agent's ERC-6551 wallet.
+
+**Live end-to-end verification (2026-06-02, hardened)** — advertise → discover → post →
+accept → submit → approve, worker `wkr-42a553@asom` (token 6):
+
+| Step | Tx |
+|---|---|
+| **advertise** `demo.echo` (then `providers("demo.echo") = [6]`) | [`0x2de3…ee32`](https://shannon-explorer.somnia.network/tx/0x2de36500403b85533ed4348552b1baa56fe846f3c19cff25d6994d3b257fee32) |
+| **postTask** #1 (0.02 STT escrowed) | [`0xbad0…652e`](https://shannon-explorer.somnia.network/tx/0xbad0b1830bc737a856e5f49f1860521e6c2ab75638bc66e2649a0795b142652e) |
+| **accept** + submit + **approve** → reward into the agent's wallet (0 → 0.02 STT) | [`0x389b…e986`](https://shannon-explorer.somnia.network/tx/0x389bbaa47af34a40bce7fe828d0fdf0f335a9d9ed6fcf1fbf7f8342933b1e986) · [`0x55a4…4b18`](https://shannon-explorer.somnia.network/tx/0x55a43fc21fafb01664b2b12cb36a14a934db07558a63b8755d4a64f46be34b18) |
+
+Reproduce: `PRIVATE_KEY=0x… tsx packages/cli/scripts/verify-coordination.mts`.
+
+---
+
 ### OracleAgent (current) — hardened
 
 Consensus-verified price oracle via the Somnia Agents JSON API. Adds a non-owner
@@ -94,5 +126,5 @@ Consensus callback updated `latestPrice = 7,116,900,000,000` → **BTC = $71,169
 
 ## Test coverage
 
-`forge test` → **65** (identity + fuzz + invariant + security + oracle).
-`pnpm --filter @asom/sdk test` → **27** · `pnpm --filter @asom/cli test` → **28**. CI runs all three.
+`forge test` → **102** (identity + fuzz + invariant + security + oracle + coordination + SomniaAI).
+`pnpm --filter @asom/sdk test` → **34** · `pnpm --filter @asom/cli test` → **29**. CI runs all three.
