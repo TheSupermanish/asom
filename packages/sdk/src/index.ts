@@ -8,6 +8,11 @@ export {
   agentAccountAbi,
   capabilityRegistryAbi,
   taskBoardAbi,
+  llmAgentAbi,
+  parseAgentAbi,
+  somniaAgentRegistryAbi,
 } from "./abis.js";
 export { validateName, isValidName, parseStt } from "./validate.js";
-export { somniaAgents, somniaPlatform } from "./somnia.js";
+export { somniaAgents, somniaPlatform, somniaAgentRegistry } from "./somnia.js";
+export type { SomniaAgentInfo } from "./somnia.js";
+export type { AiKind, AiResult, ExtractParams } from "./client.js";
