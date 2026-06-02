@@ -202,7 +202,11 @@ abstract contract AgentCompute is ReentrancyGuard {
     function _onFailed(uint256 requestId, ResponseStatus status) internal virtual {}
 
     /// @notice Pull funds back out (owner only). Useful for rebate sweeps / end-of-demo.
-    function withdraw(address payable to, uint256 amount) external nonReentrant {
+    /// @dev    `virtual` so a subclass that custodies third-party funds (e.g. Tsugu's
+    ///         Vault, which escrows contributor money) can override this to ring-fence
+    ///         those funds — the owner of such a contract must never be able to sweep
+    ///         escrow. Behaviour is unchanged for primitives that don't override.
+    function withdraw(address payable to, uint256 amount) external virtual nonReentrant {
         if (msg.sender != owner) revert NotOwner();
         (bool ok,) = to.call{value: amount}("");
         if (!ok) revert WithdrawFailed();
@@ -210,7 +214,9 @@ abstract contract AgentCompute is ReentrancyGuard {
     }
 
     /// @notice Sweep the entire balance back to `to` (owner only).
-    function withdrawAll(address payable to) external nonReentrant {
+    /// @dev    `virtual` for the same reason as {withdraw}: an escrow-holding subclass
+    ///         overrides this to sweep only its free (non-escrow) balance.
+    function withdrawAll(address payable to) external virtual nonReentrant {
         if (msg.sender != owner) revert NotOwner();
         uint256 amount = address(this).balance;
         (bool ok,) = to.call{value: amount}("");
