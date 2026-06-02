@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { TsuguClient, shannon, deployments } from "../src/index.js";
+import { TsuguClient, shannon, deployments, validateName, isValidName, parseStt } from "../src/index.js";
+import { parseEther } from "viem";
 
 const ANVIL_KEY =
   "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" as const;
@@ -45,5 +46,57 @@ describe("TsuguClient unit (no chain)", () => {
   it("derives the signer address from a private key", () => {
     const c = new TsuguClient({ privateKey: ANVIL_KEY });
     expect(c.signerAddress).toBe("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266");
+  });
+
+  it("rejects a malformed private key with a clear message", () => {
+    expect(() => new TsuguClient({ privateKey: "0xdead" as `0x${string}` })).toThrow(/32-byte hex/);
+    expect(() => new TsuguClient({ privateKey: "nope" as `0x${string}` })).toThrow(/32-byte hex/);
+  });
+});
+
+describe("validateName (mirrors the on-chain validator)", () => {
+  it("accepts valid names", () => {
+    for (const n of ["neo", "agent-007", "x", "trinity99", "a".repeat(32)]) {
+      expect(isValidName(n)).toBe(true);
+    }
+  });
+
+  it("rejects empty, too-long, and out-of-charset names", () => {
+    expect(() => validateName("")).toThrow(/empty/);
+    expect(() => validateName("a".repeat(33))).toThrow(/too long/);
+    expect(() => validateName("Neo")).toThrow(/invalid character/);
+    expect(() => validateName("neo bot")).toThrow(/invalid character/);
+    expect(() => validateName("my_agent")).toThrow(/invalid character/);
+    expect(() => validateName("café")).toThrow(/invalid character/);
+  });
+
+  it("rejects bad hyphen placement", () => {
+    expect(() => validateName("-neo")).toThrow(/start or end with a hyphen/);
+    expect(() => validateName("neo-")).toThrow(/start or end with a hyphen/);
+    expect(() => validateName("ne--o")).toThrow(/doubled hyphen/);
+  });
+});
+
+describe("parseStt", () => {
+  it("parses positive decimals to wei", () => {
+    expect(parseStt("0.05")).toBe(parseEther("0.05"));
+    expect(parseStt("0")).toBe(0n);
+    expect(parseStt("12")).toBe(parseEther("12"));
+  });
+
+  it("rejects NaN, negative, and non-finite amounts", () => {
+    expect(() => parseStt("abc")).toThrow(/positive decimal/);
+    expect(() => parseStt("-1")).toThrow(/positive decimal/);
+    expect(() => parseStt("")).toThrow(/positive decimal/);
+  });
+
+  it("rejects scientific/hex notation and >18 decimals (no opaque parseEther passthrough)", () => {
+    for (const bad of ["1e-3", "1E3", "0x10", "1.2345678901234567890", "Infinity", "1,5", ".", "5."]) {
+      expect(() => parseStt(bad)).toThrow(/positive decimal/);
+    }
+  });
+
+  it("trims surrounding whitespace", () => {
+    expect(parseStt("  0.05  ")).toBe(parseEther("0.05"));
   });
 });

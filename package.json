@@ -1,6 +1,6 @@
 {
   "name": "tsugu",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "description": "tsugu — the agentic layer for the agent economy on Somnia",
   "packageManager": "pnpm@9.12.0",

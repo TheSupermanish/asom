@@ -41,8 +41,14 @@ const SCRYPT_N = 1 << 15; // 32768
 const SCRYPT_R = 8;
 const SCRYPT_P = 1;
 const SCRYPT_N_FLOOR = 1 << 14; // reject keystores weakened below this on load
+const SCRYPT_N_CEIL = 1 << 18; // and cap above this so a tampered N can't force an OOM
+const SCRYPT_R_CEIL = 8; // r is realistically <= 8; bound worst-case memory
+const SCRYPT_P_CEIL = 16;
 
 function deriveScryptKey(password: string, salt: Buffer, n: number, r: number, p: number): Buffer {
+  // maxmem scales with the (validated, bounded) n*r, so worst case is capped at
+  // ~128 * 2^18 * 8 * 2 ≈ 536MB — and only ever reached after loadSeed has
+  // accepted the params. Out-of-range params are rejected before we get here.
   return scryptSync(password, salt, 32, { N: n, r, p, maxmem: 128 * n * r * 2 });
 }
 
@@ -117,20 +123,33 @@ export function saveSeed(mnemonic: string, password: string): Address {
  *  "corrupt keystore" if the file's fields are tampered/malformed. */
 export function loadSeed(password: string): string {
   const file = JSON.parse(readFileSync(KEYSTORE_PATH, "utf8")) as KeystoreFile;
+
+  // Validate the envelope shape before touching crypto, so a version/type
+  // mismatch is diagnosable (and distinct from "wrong password").
+  if (file.version !== 2 || file.type !== "hd-mnemonic") {
+    throw new Error("unsupported keystore version/type — upgrade tsugu or re-run `tsugu login`");
+  }
+
   const salt = Buffer.from(file.salt, "hex");
   const iv = Buffer.from(file.iv, "hex");
   const tag = Buffer.from(file.tag, "hex");
 
-  // Don't trust an on-disk file blindly: a short/forged GCM tag weakens integrity
-  // and a downgraded scrypt N weakens brute-force resistance.
+  // Don't trust an on-disk file blindly: a short/forged GCM tag weakens integrity,
+  // a downgraded scrypt N weakens brute-force resistance, and an inflated N/r could
+  // force a memory-exhaustion OOM. Bound every KDF param (and require N be a power
+  // of two, as scrypt demands) before deriving.
   if (salt.length !== 16 || iv.length !== 12 || tag.length !== 16) {
     throw new Error("corrupt keystore (bad salt/iv/tag length)");
   }
   if (
     file.kdf !== "scrypt" ||
-    !(file.n >= SCRYPT_N_FLOOR) ||
-    !(file.r >= 1 && file.r <= 32) ||
-    !(file.p >= 1 && file.p <= 16)
+    !Number.isInteger(file.n) ||
+    !(file.n >= SCRYPT_N_FLOOR && file.n <= SCRYPT_N_CEIL) ||
+    (file.n & (file.n - 1)) !== 0 ||
+    !Number.isInteger(file.r) ||
+    !(file.r >= 1 && file.r <= SCRYPT_R_CEIL) ||
+    !Number.isInteger(file.p) ||
+    !(file.p >= 1 && file.p <= SCRYPT_P_CEIL)
   ) {
     throw new Error("corrupt keystore (unsupported or weakened KDF params)");
   }
@@ -154,6 +173,14 @@ export function removeKeystore(): void {
  *  secrets — trimming a password silently changes it and can lock you out of a
  *  keystore restored elsewhere. Uses `prompts` for TTY masking + Ctrl-C handling. */
 export async function prompt(question: string, hidden = false, trim = true): Promise<string> {
+  // No TTY → prompts() would silently return undefined and we'd coerce it to "".
+  // Fail loudly instead, and point at the non-interactive escape hatches.
+  if (!process.stdin.isTTY) {
+    process.stderr.write(
+      "tsugu: no interactive terminal available. For automation set TSUGU_PASSWORD (to unlock the keystore) or PRIVATE_KEY (to use a key directly).\n",
+    );
+    process.exit(1);
+  }
   const { value } = await prompts(
     { type: hidden ? "password" : "text", name: "value", message: question.trim() },
     { onCancel: () => process.exit(1) },

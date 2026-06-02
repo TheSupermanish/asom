@@ -55,10 +55,6 @@ importers:
   packages/contracts: {}
 
   packages/sdk:
-    dependencies:
-      viem:
-        specifier: ^2.21.0
-        version: 2.51.3(typescript@5.9.3)
     devDependencies:
       '@types/node':
         specifier: ^22.7.0
@@ -69,6 +65,9 @@ importers:
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
+      viem:
+        specifier: ^2.21.0
+        version: 2.51.3(typescript@5.9.3)
       vitest:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.19)

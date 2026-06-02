@@ -1,6 +1,6 @@
 {
   "name": "@tsugu/cli",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "description": "tsugu command-line tool — create and operate agents on Somnia",
   "license": "MIT",
   "author": "Wono Labs",
@@ -15,6 +15,9 @@
   },
   "keywords": ["somnia", "erc-6551", "agents", "cli", "tsugu"],
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "bin": {
     "tsugu": "./dist/index.js"
   },
