@@ -35,3 +35,6 @@ pnpm-debug.log*
 coverage
 *.lcov
 lcov.info
+
+# CI workflow staged locally; push needs a workflow-scoped token (add via UI/scoped push)
+.github/workflows/ci.yml
