@@ -61,6 +61,16 @@ contract VaultTest is Test {
         arr[0] = a;
     }
 
+    function _checks(Vault.NewCheck memory a, Vault.NewCheck memory b)
+        internal
+        pure
+        returns (Vault.NewCheck[] memory arr)
+    {
+        arr = new Vault.NewCheck[](2);
+        arr[0] = a;
+        arr[1] = b;
+    }
+
     function _checks(Vault.NewCheck memory a, Vault.NewCheck memory b, Vault.NewCheck memory c)
         internal
         pure
@@ -450,6 +460,34 @@ contract VaultTest is Test {
         vm.prank(bob);
         vault.refund(id);
         assertEq(vault.totalEscrow(), 0);
+    }
+
+    function test_lateCallback_afterExpiry_cannotConfirm() public {
+        // 2-of-2 pact; both checks dispatched (in flight) before the deadline.
+        vm.prank(creator);
+        uint256 id = vault.createPact{value: 2 ether}(_pact(_checks(_web("a"), _text("b")), 2, 0));
+        vm.prank(bob);
+        uint256 r0 = vault.requestResolution{value: deposit()}(id, 0);
+        vm.prank(bob);
+        uint256 r1 = vault.requestResolution{value: deposit()}(id, 1);
+
+        // deadline passes with both still in flight → anyone expires it
+        vm.warp(block.timestamp + 31 days);
+        vault.markExpired(id);
+        assertEq(uint8(_status(id)), uint8(Vault.PactStatus.Expired));
+
+        // the consensus callbacks land LATE — they must not resurrect the pact
+        platform.fireString(address(vault), r0, "confirmed");
+        platform.fireString(address(vault), r1, "confirmed");
+        assertEq(uint8(_status(id)), uint8(Vault.PactStatus.Expired));
+
+        // refund still works; release is impossible
+        vm.expectRevert(abi.encodeWithSelector(Vault.NotConfirmed.selector, Vault.PactStatus.Expired));
+        vault.release(id);
+        uint256 c0 = creator.balance;
+        vm.prank(creator);
+        vault.refund(id);
+        assertEq(creator.balance, c0 + 2 ether);
     }
 
     function test_markExpired_thenRefund() public {

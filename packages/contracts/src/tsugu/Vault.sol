@@ -393,7 +393,10 @@ contract Vault is AgentCompute {
     ///      is unreachable; otherwise Resolving (a check in flight) or back to Open.
     function _evaluate(uint256 pactId, uint256 requestId) private {
         Pact storage p = pacts[pactId];
-        if (p.status == PactStatus.Confirmed || p.status == PactStatus.Denied) return; // terminal verdict locked
+        // Only an UNDECIDED pact can change verdict. Confirmed/Denied/Released/Expired
+        // are terminal — a late callback (e.g. one that lands after markExpired and a
+        // refund) must never flip a settled pact back to Confirmed.
+        if (p.status != PactStatus.Open && p.status != PactStatus.Resolving) return;
 
         uint256 n = p.checks.length;
         uint256 confirmed;
