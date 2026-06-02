@@ -67,8 +67,9 @@ testnet stand-in; mainnet swaps in a real lending/staking adapter behind the sam
 | **Vault** (Pacts) | [`0x5F7CF1e3206140CB73e5365E287AE8D1d7B770dC`](https://shannon-explorer.somnia.network/address/0x5F7CF1e3206140CB73e5365E287AE8D1d7B770dC) |
 | **DemoYieldStrategy** (testnet yield) | [`0xFFFF7c37D382e17B88A4F92c363dE6511E9bDfEF`](https://shannon-explorer.somnia.network/address/0xFFFF7c37D382e17B88A4F92c363dE6511E9bDfEF) |
 
-Four demo pacts (Relief / Medical / Fundraise / Medical+Yield) are live, each **2-of-2
-multi-source confirmed** by real consensus AI with on-chain receipts. Full addresses + tx in
+Five demo pacts are live — four **2-of-2 multi-source** (Web/parse + Text/LLM) and one **Data-only**
+(JSON-API) — so **all three Somnia agents are proven live end-to-end**, each verdict backed by an
+on-chain consensus receipt. Full addresses + tx in
 [`packages/contracts/DEPLOYMENTS.md`](./packages/contracts/DEPLOYMENTS.md).
 
 ## Security
