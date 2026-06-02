@@ -17,9 +17,14 @@ const TTL_MS = Number(process.env.DISCOVER_TTL_MS ?? 30_000);
 let _client: TsuguClient | null = null;
 let _directory: AgentDirectory | null = null;
 
-function client(): TsuguClient {
+/** The shared read-only TsuguClient (public RPC, no signer) reused across requests. */
+export function serverClient(): TsuguClient {
   if (!_client) _client = new TsuguClient({ rpcUrls: [RPC] });
   return _client;
+}
+
+function client(): TsuguClient {
+  return serverClient();
 }
 
 /** The shared, TTL-cached agent directory (lazily built on first request). */

@@ -598,10 +598,19 @@ export const somniaAgentRegistryAbi = [
     name: "getAgent",
     stateMutability: "view",
     inputs: [{ name: "agentId", type: "uint256" }],
+    // Returns a SINGLE struct, not three flat values. Verified live against the mainnet
+    // registry 0xaD3101… — a flat (uint256,string,string) decode overruns (missing the
+    // outer tuple offset). Keep this a tuple.
     outputs: [
-      { name: "id", type: "uint256" },
-      { name: "metadataJsonUri", type: "string" },
-      { name: "tarUri", type: "string" },
+      {
+        name: "agent",
+        type: "tuple",
+        components: [
+          { name: "id", type: "uint256" },
+          { name: "metadataJsonUri", type: "string" },
+          { name: "tarUri", type: "string" },
+        ],
+      },
     ],
   },
 ] as const;
