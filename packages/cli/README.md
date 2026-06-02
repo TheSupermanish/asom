@@ -1,47 +1,59 @@
 # @tsugu/cli
 
-The `tsugu` command-line tool. Create and operate agents on Somnia — every agent gets a name and an ERC-6551 wallet.
+The `tsugu` command-line tool. Create and operate agents on Somnia — every agent gets a name and an ERC-6551 wallet, **owned by you**.
 
 ```bash
-pnpm --filter @tsugu/cli build
-export PRIVATE_KEY=0x...        # only needed for writes (create)
+npm i -g @tsugu/cli
 
-tsugu create neo                 # mint neo@tsugu + its wallet, on-chain
-tsugu resolve neo                # look up an agent (no key needed)
-tsugu available trinity          # is a name free?
-tsugu whoami                     # show your signer address
+tsugu login              # import your Somnia key once → encrypted keystore
+tsugu create neo         # name + wallet, owned by your key
+tsugu resolve neo        # look up any agent (no key needed)
+tsugu ls                 # agents you own
+tsugu fund neo --wallet 0.05
 ```
+
+## Keys: encrypted, non-custodial
+
+tsugu never holds your key. You import it **once** into a password-encrypted keystore on your own machine (scrypt + AES-256-GCM, same idea as `cast wallet`). The plaintext key never lands on disk, never leaves your machine, and tsugu has no server.
+
+```bash
+tsugu login           # paste key (hidden) + set a password → ~/.tsugu/keystore.json
+tsugu key address     # show your address (no password)
+tsugu key export      # reveal the key after password — for backup / import elsewhere
+tsugu logout          # delete the keystore from this machine
+```
+
+Writes (`create`, `fund`) ask for your password to unlock the key, sign locally, and send only the signed transaction. Set `TSUGU_PASSWORD` to skip the prompt in scripts, or `PRIVATE_KEY` to bypass the keystore entirely (quick testnet runs — your risk).
 
 ## `tsugu create <name>`
 
-Mints the AgentNFT, deploys the agent's ERC-6551 token-bound wallet, registers the name, and (optionally) seeds the wallet with STT — in one transaction.
+Registers the name, deploys the agent's ERC-6551 wallet, and seeds it — all owned by your key. Reads don't need a key; this does.
 
 ```bash
-tsugu create neo --seed 0.05            # seed the wallet with 0.05 STT
-tsugu create neo --owner 0xABC...        # mint to a different owner
+tsugu create neo                 # --seed defaults to 0.02 STT
+tsugu create neo --seed 0.1
 ```
 
-Output:
-
 ```
-✓ neo@tsugu is live.
+  ✨ neo@tsugu is live.
 
-  neo@tsugu
-  token    #1
-  wallet   0x3Ec0397677a61121CAe3b503835EDd3bB76061d3
-  owner    0x875eFb079A2b68267a1bE03cAd0E1A7Ee4bA0B2E
-  balance  0.0500 STT
-  explorer https://shannon-explorer.somnia.network/address/0x3Ec0...61d3
-  register tx https://shannon-explorer.somnia.network/tx/0xace1...9679
+   neo@tsugu
+
+  token     #1
+  wallet    0x3Ec0…           ← the agent's ERC-6551 account (holds its funds)
+  owner     0x875e…           ← your address (you control it)
+  balance   0.0200 STT
+  📜 tx     https://shannon-explorer.somnia.network/tx/…
 ```
+
+The agent's wallet is its own address (receives payments, holds its balance), but **you** control it via your key. Each agent's funds stay separate; one owner. `tsugu fund <name> --wallet <stt>` tops up an agent's wallet later.
 
 ## Config
 
-| Env var | Purpose | Required |
-|---|---|---|
-| `PRIVATE_KEY` | Signer for writes (`create`) | only for `create` |
-| `SHANNON_RPC_URL` | RPC override | no (defaults to public Shannon RPC) |
+| Env var | Purpose |
+|---|---|
+| `TSUGU_PASSWORD` | Unlock the keystore non-interactively (scripts/CI) |
+| `PRIVATE_KEY` | Bypass the keystore (plaintext, testnet shortcut) |
+| `SHANNON_RPC_URL` | RPC override |
 
-Reads (`resolve`, `available`) need no key. The CLI loads a `.env` from the working directory.
-
-Built on [`@tsugu/sdk`](../sdk).
+No STT to pay gas? The CLI points you at the faucet. Built on [`@tsugu/sdk`](../sdk).
