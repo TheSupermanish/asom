@@ -55,6 +55,13 @@ contract MockAgentPlatform is IAgentRequester {
         _deliver(target, requestId, responses, ResponseStatus.Success);
     }
 
+    /// @notice Deliver a successful callback carrying an abi-encoded `bool` result
+    ///         (the JSON-API `fetchBool` resolver path).
+    function fireBool(address target, uint256 requestId, bool value) external {
+        Response[] memory responses = _one(abi.encode(value));
+        _deliver(target, requestId, responses, ResponseStatus.Success);
+    }
+
     /// @notice Deliver a non-success terminal status (Failed / TimedOut) with no results.
     function fireFailure(address target, uint256 requestId, ResponseStatus status) external {
         _deliver(target, requestId, new Response[](0), status);
