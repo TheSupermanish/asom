@@ -54,7 +54,6 @@ contract Vault is AgentCompute {
         Fundraise, // a founder raises against milestones, released when each is verified
         Insurance, // a premium pays out when the parametric event is AI-confirmed
         Custom // any claim backed by evidence
-
     }
 
     /// @notice Which Somnia AI agent verifies a given check.
@@ -62,7 +61,6 @@ contract Vault is AgentCompute {
         Web, // parse-website agent: read `source` (a URL), classify against the claim
         Data, // JSON-API agent: fetch a boolean at `jsonPath` from `source` (a URL)
         Text // LLM-inference agent: reason over the claim + `source` (evidence text)
-
     }
 
     /// @notice Per-check outcome. Inconclusive checks can be re-requested.
@@ -72,7 +70,6 @@ contract Vault is AgentCompute {
         Confirmed,
         Denied,
         Inconclusive // a fuzzy answer — retryable, never releases funds
-
     }
 
     /// @notice Pact lifecycle (driven by the quorum tally over its checks).
@@ -83,7 +80,6 @@ contract Vault is AgentCompute {
         Denied, // quorum became unreachable; contributors can refund
         Released, // escrow paid to the beneficiary
         Expired // deadline passed undecided; contributors can refund
-
     }
 
     /// @notice One independent piece of evidence and its consensus verdict.
@@ -202,7 +198,9 @@ contract Vault is AgentCompute {
     event CheckResolved(
         uint256 indexed pactId, uint256 checkIndex, uint256 indexed requestId, string answer, CheckStatus status
     );
-    event PactConfirmed(uint256 indexed pactId, uint256 indexed requestId, uint256 confirmedChecks, uint64 releasableAt);
+    event PactConfirmed(
+        uint256 indexed pactId, uint256 indexed requestId, uint256 confirmedChecks, uint64 releasableAt
+    );
     event PactDenied(uint256 indexed pactId, uint256 indexed requestId, uint256 confirmedChecks, uint256 deniedChecks);
     event PactResolutionFailed(uint256 indexed pactId, uint256 indexed requestId, ResponseStatus status);
     event PactReleased(uint256 indexed pactId, address indexed beneficiary, uint256 amount);
@@ -399,7 +397,11 @@ contract Vault is AgentCompute {
             requestId = _dispatch(jsonAgentId, payload);
         } else {
             string memory prompt = string.concat(
-                "Claim to verify: ", claimText, "\n\nEvidence:\n", c.source, "\n\nIs the claim supported by the evidence?"
+                "Claim to verify: ",
+                claimText,
+                "\n\nEvidence:\n",
+                c.source,
+                "\n\nIs the claim supported by the evidence?"
             );
             bytes memory payload = SomniaAI.encodeInferString(
                 prompt,
