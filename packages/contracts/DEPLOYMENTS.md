@@ -84,6 +84,29 @@ Reproduce: `PRIVATE_KEY=0x… tsx packages/cli/scripts/verify-coordination.mts`.
 
 ---
 
+### AI compute layer — LlmAgent + ParseAgent (pending deploy)
+
+The fundamental AI primitives built on `AgentCompute` (the distilled, hardened Somnia-Agents
+pattern + on-chain **consensus receipts**). `OracleAgent` (below) already covers the JSON agent;
+these add the LLM-inference and parse-website agents.
+
+| Contract | Somnia agent | Address |
+|---|---|---|
+| **LlmAgent** (classify / number) | LLM inference `12847293847561029384` ⚠️ experimental | _deploy via `script/DeployCompute.s.sol`_ |
+| **ParseAgent** (web extract) | parse-website `12875401142070969085` | _deploy via `script/DeployCompute.s.sol`_ |
+
+Deploy + wire:
+
+```bash
+PRIVATE_KEY=0x… forge script script/DeployCompute.s.sol:DeployCompute \
+  --rpc-url shannon --broadcast --slow --gas-estimate-multiplier 800
+# then set llmAgent / parseAgent in packages/sdk/src/addresses.ts and re-run `tsugu ai …`
+```
+
+After deploy, fund each contract above `requiredDeposit()` (read live) before the first request —
+the reward pot must clear the per-agent budget floor or the request `TimedOut`s. The LLM agent id
+is experimental: confirm it against `agents.somnia.network` before mainnet.
+
 ### OracleAgent (current) — hardened
 
 Consensus-verified price oracle via the Somnia Agents JSON API. Adds a non-owner

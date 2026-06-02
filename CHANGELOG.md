@@ -3,6 +3,39 @@
 All notable changes to tsugu are documented here. Packages are versioned in lockstep.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+The fundamental AI layer + a write-capable console.
+
+### Added
+
+- **Contracts — `AgentCompute` (abstract base)** distilling `OracleAgent`'s hardened
+  Somnia-Agents pattern (deposit math, the four callback guards, overpayment refund,
+  reentrancy, `receive()` rebates) into one audited base, plus two new primitives on it:
+  - **`LlmAgent`** — consensus LLM inference: `requestClassification` (constrained verdict —
+    an advisory referee, e.g. `accept`/`reject`) and `requestNumber` (bounded score).
+  - **`ParseAgent`** — consensus website extraction (`requestExtract`).
+  - **Consensus receipts**: every successful request now records `{validators, finalizedAt,
+    receiptId, executionCost(median)}` and emits `ConsensusReached` — the Somnia receipt data
+    was previously discarded. Read via `receipts(id)` / `consensusOf(id)`.
+  - `script/DeployCompute.s.sol`; +27 contract tests (130 total).
+- **SDK** — browser-wallet signing (`new TsuguClient({ walletClient })` for self-custodial UI
+  writes); `aiClassify` / `aiNumber` / `aiExtract` + `waitForAiResult` + `aiConsensus`;
+  `resolveSomniaAgents()` (reads Somnia's mainnet AgentRegistry, falls back to constants on
+  testnet — the two-store resolver) and `somniaRequestDeposit()`.
+- **CLI** — `tsugu ai classify|number|extract|judge` and `tsugu somnia` (lists base agents +
+  their resolution source).
+- **Web** — a write-capable console on `apps/web` (wagmi + injected wallet): **Create**
+  (AI suggests a capability → mint + advertise), **Discover**, **Tasks** (post → accept →
+  submit → approve, with "Ask AI to judge"), and **Workflows** (chained consensus-AI steps).
+
+### Notes
+
+- The LLM agent id remains **experimental** (see `SomniaAgents.sol` / `docs/SOMNIA_AI.md`); a
+  wrong live id/ABI degrades to `TimedOut` (handled) — it never corrupts stored state.
+- The deployed `TaskBoard` is **unchanged**: AI judging is **advisory** (the poster still
+  approves/refunds), so no redeploy and no new trust assumption.
+
 ## [0.1.0] — 2026-06-02
 
 Production-hardening pass: a security review (contracts, SDK, CLI, keystore) drove a

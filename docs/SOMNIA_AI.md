@@ -191,6 +191,25 @@ WebSocket `eth_subscribe` + `somnia_watch` (`@somnia-chain/reactivity` + viem) p
 
 ---
 
+## IMPLEMENTATION STATUS (updated 2026-06-02)
+
+- **Tier 1.1 — generalized compute mixin: DONE.** `AgentCompute` (abstract) distills the
+  `OracleAgent` pattern; `LlmAgent` (inference: classify/number) and `ParseAgent` (web extract)
+  are built on it. All three base agents are now reusable on-chain primitives.
+- **Tier 1.3 — AI-judged settlement: DONE (advisory).** `LlmAgent.requestClassification` with
+  `allowedValues=["accept","reject"]` is exposed via `tsugu ai judge` and the console's "Ask AI to
+  judge". It informs the poster; the deployed `TaskBoard` is unchanged (no contract gets unilateral
+  payout authority — a deliberately conservative, no-redeploy choice).
+- **Consensus receipts: DONE.** The platform `Response.receipt` / `executionCost` data (previously
+  discarded) is now captured per request by `AgentCompute` (`consensusOf(id)` + `ConsensusReached`).
+- **Somnia AgentRegistry resolver: DONE (read-only, optional).** `TsuguClient.resolveSomniaAgents()`
+  reads Somnia's mainnet registry (`getAllAgents`/`getAgent`) and falls back to the hardcoded
+  `SomniaAgentIds` on testnet — the §3 two-store resolver. Surfaced by `tsugu somnia`.
+- **Deferred: Tier 2.x reactivity (precompile `0x0100`).** Keeperless schedules, self-refreshing
+  oracles, and auto-settling task boards remain UNVERIFIED (constants/units, testnet-only) and are
+  not built. The console's Workflows page demonstrates the `fetch → reason → act` pipeline
+  client-side without depending on the precompile.
+
 ## INTEGRATION PLAN FOR TSUGU
 
 Ranked by **impact ÷ effort**. tsugu already has the hard parts (identity, TBAs, a hardened `OracleAgent.sol` wired to the JSON agent). The wins are in generalizing that into a *capability* and adding the coordination economics Somnia lacks.
