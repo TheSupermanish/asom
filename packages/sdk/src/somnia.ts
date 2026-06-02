@@ -1,0 +1,21 @@
+import type { Address } from "viem";
+
+/**
+ * Canonical Somnia AI agents — the consensus-verified compute an asom agent can
+ * offer as a capability. Same `agentId` on testnet and mainnet; only the platform
+ * address differs. See repo docs/SOMNIA_AI.md.
+ *
+ * `verified` reflects whether the agent ID is confirmed on-chain. The LLM id is
+ * currently UNVERIFIED — confirm against agents.somnia.network before relying on it.
+ */
+export const somniaAgents = {
+  jsonApi: { id: 13174292974160097713n, verified: true, capability: "somnia.json-fetch" },
+  llmInference: { id: 12847293847561029384n, verified: false, capability: "somnia.llm-inference" },
+  parseWebsite: { id: 12875401142070969085n, verified: true, capability: "somnia.parse-website" },
+} as const;
+
+/** Somnia Agents platform contract, by chain id. */
+export const somniaPlatform: Record<number, Address> = {
+  50312: "0x037Bb9C718F3f7fe5eCBDB0b600D607b52706776", // Shannon testnet
+  5031: "0x5E5205CF39E766118C01636bED000A54D93163E6", // Somnia mainnet
+};

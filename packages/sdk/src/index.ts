@@ -10,3 +10,4 @@ export {
   taskBoardAbi,
 } from "./abis.js";
 export { validateName, isValidName, parseStt } from "./validate.js";
+export { somniaAgents, somniaPlatform } from "./somnia.js";
