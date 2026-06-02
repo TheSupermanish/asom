@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import {AgentCompute} from "../agents/AgentCompute.sol";
 import {SomniaAI} from "../agents/lib/SomniaAI.sol";
 import {SomniaAgentIds, ResponseStatus} from "../agents/lib/SomniaAgents.sol";
+import {IYieldStrategy} from "./IYieldStrategy.sol";
 
 /// @title  Vault — Tsugu's AI-verified conditional escrow
 /// @notice Money that moves on proof, not promises. A **Pact** is a permissionless
@@ -106,7 +107,9 @@ contract Vault is AgentCompute {
         uint64 deadline; // claim must be proven by here; after, contributors can refund
         uint64 confirmedAt; // when quorum was reached (starts the dispute window)
         uint64 disputeWindow; // seconds after confirmedAt before release is allowed (0 = instant)
-        uint256 escrow; // wei currently held for this pact
+        uint256 escrow; // principal contributed (held in-vault, or sent to the yield strategy)
+        bool yieldOn; // opt-in: escrow is deployed to the yield strategy to earn while it waits
+        uint256 shares; // yield-strategy shares held for this pact (only when yieldOn)
         string claim; // the human claim every check verifies
         Check[] checks; // 1..MAX_CHECKS independent evidence sources
     }
@@ -127,6 +130,7 @@ contract Vault is AgentCompute {
         uint64 deadline;
         uint64 disputeWindow;
         uint8 quorum;
+        bool earnYield; // opt-in: put the escrow to work in the yield strategy while it waits
         string claim;
         NewCheck[] checks;
     }
@@ -146,8 +150,16 @@ contract Vault is AgentCompute {
 
     Pact[] internal pacts;
 
-    /// @notice Sum of every pact's live escrow. The owner can never withdraw below this.
+    /// @notice Sum of in-vault native escrow (non-yield pacts). The owner can never
+    ///         withdraw below this. Yield pacts' funds live in the strategy, not here.
     uint256 public totalEscrow;
+
+    /// @notice Optional yield venue for opt-in pacts. address(0) = yield disabled.
+    ///         Owner-settable only while no shares are deployed (no active yield pacts).
+    IYieldStrategy public yieldStrategy;
+
+    /// @notice Aggregate strategy shares held across all yield pacts.
+    uint256 public outstandingShares;
 
     /// @notice pactId → contributor → wei contributed (the refundable ledger).
     mapping(uint256 => mapping(address => uint256)) public contributions;
@@ -179,6 +191,7 @@ contract Vault is AgentCompute {
     event PactReleased(uint256 indexed pactId, address indexed beneficiary, uint256 amount);
     event PactRefunded(uint256 indexed pactId, address indexed contributor, uint256 amount);
     event PactExpired(uint256 indexed pactId);
+    event YieldStrategySet(address indexed strategy);
 
     error BadBeneficiary();
     error BadDeadline();
@@ -205,6 +218,8 @@ contract Vault is AgentCompute {
     error ReleaseFailed();
     error RefundFailedTo(address to);
     error EscrowLocked(uint256 requested, uint256 free);
+    error YieldUnavailable();
+    error YieldStrategyLocked();
 
     /// @param platform_         Somnia Agents platform (createRequest/handleResponse).
     /// @param parseAgentId_     parse-website agent id (0 → canonical PARSE_WEBSITE).
@@ -226,12 +241,22 @@ contract Vault is AgentCompute {
         llmAgentId = llmAgentId_ == 0 ? SomniaAgentIds.LLM_INFERENCE : llmAgentId_;
     }
 
+    /// @notice Set (or migrate) the yield venue. Owner-only, and only while no yield
+    ///         pacts hold shares — so a live position can never be moved out from under
+    ///         contributors. Deploy order: Vault → strategy(vault) → setYieldStrategy.
+    function setYieldStrategy(address strategy_) external {
+        if (msg.sender != owner) revert NotOwner();
+        if (outstandingShares != 0) revert YieldStrategyLocked();
+        yieldStrategy = IYieldStrategy(strategy_);
+        emit YieldStrategySet(strategy_);
+    }
+
     // --- Create & fund ------------------------------------------------------
 
     /// @notice Open a pact with one or more evidence checks. Permissionless. Optionally
     ///         seed it by sending value (counts as the creator's first contribution).
     /// @return pactId index of the new pact.
-    function createPact(NewPact calldata n) external payable returns (uint256 pactId) {
+    function createPact(NewPact calldata n) external payable nonReentrant returns (uint256 pactId) {
         if (n.beneficiary == address(0)) revert BadBeneficiary();
         if (n.deadline <= block.timestamp) revert BadDeadline();
         if (bytes(n.claim).length == 0) revert EmptyClaim();
@@ -239,6 +264,7 @@ contract Vault is AgentCompute {
         if (k == 0) revert NoChecks();
         if (k > MAX_CHECKS) revert TooManyChecks(k, MAX_CHECKS);
         if (n.quorum == 0 || n.quorum > k) revert BadQuorum(n.quorum, k);
+        if (n.earnYield && address(yieldStrategy) == address(0)) revert YieldUnavailable();
 
         pactId = pacts.length;
         Pact storage p = pacts.push();
@@ -247,6 +273,7 @@ contract Vault is AgentCompute {
         p.kind = n.kind;
         p.status = PactStatus.Open;
         p.quorum = n.quorum;
+        p.yieldOn = n.earnYield;
         p.deadline = n.deadline;
         p.disputeWindow = n.disputeWindow;
         p.claim = n.claim;
@@ -269,7 +296,7 @@ contract Vault is AgentCompute {
     }
 
     /// @notice Add funds to a pact's escrow while it is still active and before deadline.
-    function contribute(uint256 pactId) external payable {
+    function contribute(uint256 pactId) external payable nonReentrant {
         Pact storage p = _pact(pactId);
         if (p.status != PactStatus.Open && p.status != PactStatus.Resolving) {
             revert NotOpenForContribution(p.status);
@@ -279,10 +306,19 @@ contract Vault is AgentCompute {
         _contribute(p, pactId, msg.value);
     }
 
+    /// @dev For a yield pact, the contribution is deposited into the strategy and the
+    ///      pact is credited shares; otherwise it's held in-vault as native escrow.
+    ///      Called only from {createPact}/{contribute}, both nonReentrant.
     function _contribute(Pact storage p, uint256 pactId, uint256 amount) private {
-        p.escrow += amount;
-        totalEscrow += amount;
         contributions[pactId][msg.sender] += amount;
+        p.escrow += amount;
+        if (p.yieldOn) {
+            uint256 s = yieldStrategy.deposit{value: amount}();
+            p.shares += s;
+            outstandingShares += s;
+        } else {
+            totalEscrow += amount;
+        }
         emit PactContributed(pactId, msg.sender, amount, p.escrow);
     }
 
@@ -433,17 +469,26 @@ contract Vault is AgentCompute {
         uint64 releasableTs = uint64(uint256(p.confirmedAt) + uint256(p.disputeWindow));
         if (block.timestamp < releasableTs) revert DisputeWindowActive(releasableTs);
 
-        uint256 amount = p.escrow;
-        if (amount == 0) revert EmptyEscrow();
-
-        p.escrow = 0;
-        totalEscrow -= amount;
-        p.status = PactStatus.Released;
+        if (p.escrow == 0) revert EmptyEscrow();
         address beneficiary = p.beneficiary;
+        p.status = PactStatus.Released;
 
-        (bool ok,) = beneficiary.call{value: amount}("");
-        if (!ok) revert ReleaseFailed();
-        emit PactReleased(pactId, beneficiary, amount);
+        uint256 paid;
+        if (p.yieldOn) {
+            // Redeem the pact's strategy shares straight to the beneficiary: principal + yield.
+            uint256 sh = p.shares;
+            p.shares = 0;
+            p.escrow = 0;
+            outstandingShares -= sh;
+            paid = yieldStrategy.redeem(sh, beneficiary);
+        } else {
+            paid = p.escrow;
+            p.escrow = 0;
+            totalEscrow -= paid;
+            (bool ok,) = beneficiary.call{value: paid}("");
+            if (!ok) revert ReleaseFailed();
+        }
+        emit PactReleased(pactId, beneficiary, paid);
     }
 
     /// @notice Refund the caller's contribution from a Denied or Expired pact. Each
@@ -452,16 +497,26 @@ contract Vault is AgentCompute {
         Pact storage p = _pact(pactId);
         if (p.status != PactStatus.Denied && p.status != PactStatus.Expired) revert NotRefundable(p.status);
 
-        uint256 amount = contributions[pactId][msg.sender];
-        if (amount == 0) revert NothingToRefund();
-
+        uint256 principal = contributions[pactId][msg.sender];
+        if (principal == 0) revert NothingToRefund();
         contributions[pactId][msg.sender] = 0;
-        p.escrow -= amount;
-        totalEscrow -= amount;
 
-        (bool ok,) = msg.sender.call{value: amount}("");
-        if (!ok) revert RefundFailedTo(msg.sender);
-        emit PactRefunded(pactId, msg.sender, amount);
+        uint256 paid;
+        if (p.yieldOn) {
+            // Redeem this contributor's pro-rata shares: their principal + their share of yield.
+            uint256 sh = (p.shares * principal) / p.escrow;
+            p.shares -= sh;
+            p.escrow -= principal;
+            outstandingShares -= sh;
+            paid = yieldStrategy.redeem(sh, msg.sender);
+        } else {
+            p.escrow -= principal;
+            totalEscrow -= principal;
+            paid = principal;
+            (bool ok,) = msg.sender.call{value: principal}("");
+            if (!ok) revert RefundFailedTo(msg.sender);
+        }
+        emit PactRefunded(pactId, msg.sender, paid);
     }
 
     /// @notice Mark an undecided pact Expired once its deadline has passed, unlocking
@@ -547,6 +602,15 @@ contract Vault is AgentCompute {
         Pact storage p = _pact(pactId);
         if (p.status != PactStatus.Confirmed) return 0;
         return uint256(p.confirmedAt) + uint256(p.disputeWindow);
+    }
+
+    /// @notice Current redeemable value of a pact's escrow: principal for non-yield
+    ///         pacts, principal + accrued yield for yield pacts. `yieldValue - escrow`
+    ///         is the yield earned so far.
+    function yieldValue(uint256 pactId) external view returns (uint256) {
+        Pact storage p = _pact(pactId);
+        if (!p.yieldOn || address(yieldStrategy) == address(0)) return p.escrow;
+        return yieldStrategy.valueOf(p.shares);
     }
 
     // --- Internal -----------------------------------------------------------
