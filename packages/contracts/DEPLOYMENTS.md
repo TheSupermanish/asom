@@ -28,9 +28,12 @@ with per-check consensus receipts (validator count + median execution cost) reco
 | #1 | Medical | Insulin treats diabetes | Wikipedia (parse) + statement (LLM) |
 | #2 | Fundraise | Ethereum = smart-contract chain | Wikipedia (parse) + statement (LLM) |
 | #3 | Medical + **yield** | Penicillin = antibiotic | Wikipedia (parse) + statement (LLM) |
+| #4 | Insurance | external task complete | JSON-API `fetchBool` (data feed) |
 
 Pact #3 opted into yield: principal 2 STT → after a reserve top-up, `yieldValue` = ~2.2 STT (+0.2);
-release pays principal + yield to the beneficiary.
+release pays principal + yield to the beneficiary. Pact #4 is resolved purely by the **JSON-API
+agent** (`fetchBool` over a live endpoint → `true` → Confirmed), so **all three Somnia agents
+(parse, JSON, LLM) are live-verified** end-to-end.
 
 Reproduce: `forge script script/DeployVault.s.sol --rpc-url shannon --broadcast --legacy --gas-estimate-multiplier 2000`,
 then create + fund a pact and call `requestResolution(pactId, checkIndex)` per check (≈0.33 STT each).
