@@ -533,4 +533,239 @@ program
     console.log(addr ? accent(addr) + muted("  (seed · index 0)") : muted("No wallet. Run: tsugu login"));
   });
 
+// --- discovery + coordination ----------------------------------------------
+
+const STATUS_NAMES = ["none", "open", "accepted", "submitted", "approved", "refunded"];
+
+program
+  .command("advertise")
+  .description("Advertise an agent's capabilities so others can discover it")
+  .argument("<name>", "the agent to list")
+  .requiredOption("-c, --cap <tags>", "capability tags, comma-separated (e.g. llm.summarize,oracle.price)")
+  .option("-u, --uri <url>", "service endpoint / metadata URI", "")
+  .option("-p, --price <stt>", "advertised price per call", "0")
+  .action(async (name: string, opts: { cap: string; uri: string; price: string }) => {
+    banner();
+    const capabilities = opts.cap.split(",").map((s) => s.trim()).filter(Boolean);
+    if (capabilities.length === 0) {
+      console.error(bad("  ✗ provide at least one --cap tag."));
+      process.exit(1);
+    }
+    parseAmount(opts.price, "--price");
+    const { operatorKey, seed } = await unlock();
+    const op = client(operatorKey);
+    let agent: Agent;
+    try {
+      agent = await op.resolve(name);
+    } catch {
+      console.error(warn(`  ${name}@tsugu is not registered.`));
+      process.exit(1);
+    }
+    let ownerKey: Hex;
+    try {
+      ownerKey = resolveOwnerKey(name, agent, seed, operatorKey, op.signerAddress!);
+    } catch (e) {
+      console.error(bad(`  ✗ ${(e as Error).message}`));
+      process.exit(1);
+    }
+    const ac = client(ownerKey);
+    await ensureOwnerGas(op, ac, name);
+    try {
+      const tx = await ac.advertise(agent.tokenId, { capabilities, serviceURI: opts.uri, pricePerCall: opts.price });
+      console.log(ok(`  📣 ${name}@tsugu advertises`) + ` ${capabilities.map((c) => accent(c)).join(", ")}`);
+      console.log(`     ${muted(op.explorer("tx", tx))}`);
+    } catch (err) {
+      console.error(bad("  ✗ advertise failed:"), (err as Error).message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("find")
+  .description("Discover agents that advertise a capability (no key needed)")
+  .argument("<capability>", "capability tag (e.g. llm.summarize)")
+  .action(async (capability: string) => {
+    const c = client();
+    const ids = await c.providers(capability);
+    if (ids.length === 0) {
+      console.log(muted(`  No agents advertise "${capability}" yet.`));
+      return;
+    }
+    console.log("");
+    console.log(`  ${brand(`${ids.length} agent(s) for "${capability}"`)}`);
+    for (const id of ids) {
+      const [name, listing] = await Promise.all([c.nameOf(id), c.listingOf(id)]);
+      const price = listing.pricePerCall > 0n ? muted(` · ${formatStt(listing.pricePerCall)} STT/call`) : "";
+      const uri = listing.serviceURI ? muted(` · ${listing.serviceURI}`) : "";
+      console.log(`  ${accent("◆")} ${pc.bold(name + "@tsugu")} ${muted("#" + id)}${price}${uri}`);
+    }
+    console.log("");
+  });
+
+const task = program.command("task").description("Coordinate work: post, accept, submit, approve, claim, refund tasks");
+
+task
+  .command("post")
+  .description("Post a task with an escrowed STT reward and a required capability")
+  .requiredOption("-c, --cap <tag>", "capability a worker must advertise")
+  .requiredOption("-r, --reward <stt>", "STT reward escrowed for the worker")
+  .option("-s, --spec <uri>", "off-chain task spec / brief", "")
+  .option("-d, --deadline <unix>", "submit-by unix timestamp (default: +7 days)")
+  .action(async (opts: { cap: string; reward: string; spec: string; deadline?: string }) => {
+    banner();
+    const rewardWei = parseAmount(opts.reward, "--reward");
+    if (rewardWei === 0n) {
+      console.error(bad("  ✗ --reward must be greater than 0 (a task needs an escrowed reward)."));
+      process.exit(1);
+    }
+    const now = Math.floor(Date.now() / 1000);
+    const deadline = opts.deadline ? Number(opts.deadline) : now + 7 * 86400;
+    if (!Number.isInteger(deadline) || deadline <= now) {
+      console.error(bad("  ✗ --deadline must be a future unix timestamp in seconds."));
+      process.exit(1);
+    }
+    const { operatorKey } = await unlock();
+    const c = client(operatorKey);
+    await assertFunded(c, rewardWei + parseEther("0.05"), "post a task");
+    try {
+      const { taskId, txHash } = await c.postTask({
+        capability: opts.cap,
+        rewardStt: opts.reward,
+        deadline,
+        specURI: opts.spec,
+      });
+      console.log(ok(`  📋 task #${taskId} posted`) + ` — ${opts.reward} STT for ${accent(opts.cap)}`);
+      console.log(`     ${muted(c.explorer("tx", txHash))}`);
+    } catch (err) {
+      console.error(bad("  ✗ post failed:"), (err as Error).message);
+      process.exit(1);
+    }
+  });
+
+async function workerAction(
+  name: string,
+  fn: (ac: TsuguClient, agent: Agent) => Promise<Hex>,
+  label: string,
+): Promise<{ tx: Hex; op: TsuguClient }> {
+  const { operatorKey, seed } = await unlock();
+  const op = client(operatorKey);
+  let agent: Agent;
+  try {
+    agent = await op.resolve(name);
+  } catch {
+    console.error(warn(`  ${name}@tsugu is not registered.`));
+    process.exit(1);
+  }
+  let ownerKey: Hex;
+  try {
+    ownerKey = resolveOwnerKey(name, agent, seed, operatorKey, op.signerAddress!);
+  } catch (e) {
+    console.error(bad(`  ✗ ${(e as Error).message}`));
+    process.exit(1);
+  }
+  const ac = client(ownerKey);
+  await ensureOwnerGas(op, ac, name);
+  try {
+    const tx = await fn(ac, agent);
+    return { tx, op };
+  } catch (err) {
+    console.error(bad(`  ✗ ${label} failed:`), (err as Error).message);
+    process.exit(1);
+  }
+}
+
+task
+  .command("accept")
+  .description("Accept a task as one of your agents (must advertise the capability)")
+  .argument("<taskId>", "task id")
+  .argument("<name>", "your agent that will do the work")
+  .action(async (taskId: string, name: string) => {
+    banner();
+    const { tx, op } = await workerAction(name, (ac, agent) => ac.acceptTask(BigInt(taskId), agent.tokenId), "accept");
+    console.log(ok(`  🤝 ${name}@tsugu accepted task #${taskId}`));
+    console.log(`     ${muted(op.explorer("tx", tx))}`);
+  });
+
+task
+  .command("submit")
+  .description("Submit a result for a task your agent accepted")
+  .argument("<taskId>", "task id")
+  .argument("<name>", "your worker agent")
+  .requiredOption("-r, --result <uri>", "off-chain result URI")
+  .action(async (taskId: string, name: string, opts: { result: string }) => {
+    banner();
+    const { tx, op } = await workerAction(name, (ac) => ac.submitResult(BigInt(taskId), opts.result), "submit");
+    console.log(ok(`  📤 ${name}@tsugu submitted task #${taskId}`));
+    console.log(`     ${muted(op.explorer("tx", tx))}`);
+  });
+
+task
+  .command("approve")
+  .description("Approve a submitted task — pays the reward into the worker's wallet")
+  .argument("<taskId>", "task id")
+  .action(async (taskId: string) => {
+    banner();
+    const { operatorKey } = await unlock();
+    const c = client(operatorKey);
+    try {
+      const tx = await c.approveTask(BigInt(taskId));
+      console.log(ok(`  ✅ task #${taskId} approved`) + muted(" — reward paid into the worker's wallet"));
+      console.log(`     ${muted(c.explorer("tx", tx))}`);
+    } catch (err) {
+      console.error(bad("  ✗ approve failed:"), (err as Error).message);
+      process.exit(1);
+    }
+  });
+
+task
+  .command("claim")
+  .description("Worker self-claims a submitted task after the review window (anti-grief)")
+  .argument("<taskId>", "task id")
+  .argument("<name>", "your worker agent")
+  .action(async (taskId: string, name: string) => {
+    banner();
+    const { tx, op } = await workerAction(name, (ac) => ac.workerClaim(BigInt(taskId)), "claim");
+    console.log(ok(`  💰 ${name}@tsugu claimed task #${taskId}`));
+    console.log(`     ${muted(op.explorer("tx", tx))}`);
+  });
+
+task
+  .command("refund")
+  .description("Reclaim a task's escrow (open task anytime, or accepted-but-expired)")
+  .argument("<taskId>", "task id")
+  .action(async (taskId: string) => {
+    banner();
+    const { operatorKey } = await unlock();
+    const c = client(operatorKey);
+    try {
+      const tx = await c.refundTask(BigInt(taskId));
+      console.log(ok(`  ↩ task #${taskId} refunded to you`));
+      console.log(`     ${muted(c.explorer("tx", tx))}`);
+    } catch (err) {
+      console.error(bad("  ✗ refund failed:"), (err as Error).message);
+      process.exit(1);
+    }
+  });
+
+task
+  .command("show")
+  .description("Show a task's status (no key needed)")
+  .argument("<taskId>", "task id")
+  .action(async (taskId: string) => {
+    const c = client();
+    const t = await c.getTask(BigInt(taskId));
+    if (t.status === 0) {
+      console.error(warn(`  task #${taskId} does not exist.`));
+      process.exit(1);
+    }
+    console.log("");
+    console.log(`  ${brand(`task #${taskId}`)} ${muted("·")} ${pc.bold(STATUS_NAMES[t.status] ?? String(t.status))}`);
+    console.log(`  ${label("reward")} ${ok(formatStt(t.reward))} STT`);
+    console.log(`  ${label("poster")} ${t.poster}`);
+    if (t.workerTokenId > 0n) console.log(`  ${label("worker")} ${muted("agent #" + t.workerTokenId)}`);
+    if (t.specURI) console.log(`  ${label("spec")} ${muted(t.specURI)}`);
+    if (t.resultURI) console.log(`  ${label("result")} ${muted(t.resultURI)}`);
+    console.log("");
+  });
+
 program.parseAsync(process.argv);
