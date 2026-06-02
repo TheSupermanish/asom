@@ -45,6 +45,7 @@ contract DemoYieldStrategy is IYieldStrategy, ReentrancyGuard {
     error NotVault();
     error NotOperator();
     error ZeroShares();
+    error NoSharesToFund();
     error RedeemTransferFailed();
 
     constructor(address vault_) {
@@ -91,6 +92,10 @@ contract DemoYieldStrategy is IYieldStrategy, ReentrancyGuard {
     ///         attack). On testnet the operator calls this to simulate accrual.
     function fund() external payable {
         if (msg.sender != operator) revert NotOperator();
+        // Accrual only ever adds to EXISTING shares. Funding an empty pool would orphan
+        // the reserve (no shares back it) and haircut the next depositor — so reject it.
+        // Operators fund after the first deposit; this enforces deposit-then-fund.
+        if (totalShares == 0) revert NoSharesToFund();
         emit Funded(msg.sender, msg.value);
     }
 
