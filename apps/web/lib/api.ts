@@ -1,4 +1,5 @@
-export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8787";
+/** Discovery is served by this same app's route handlers (app/api/*) — one app, one
+ *  origin. Relative paths keep it working on any host (localhost, Vercel) with no env. */
 export const EXPLORER = "https://shannon-explorer.somnia.network";
 
 export interface Agent {
@@ -22,14 +23,14 @@ export interface SearchResult {
 }
 
 export async function searchAgents(q: string): Promise<{ results: SearchResult[]; matchedCapabilities: string[] }> {
-  const res = await fetch(`${API_URL}/agents?q=${encodeURIComponent(q)}`, { cache: "no-store" });
+  const res = await fetch(`/api/agents?q=${encodeURIComponent(q)}`, { cache: "no-store" });
   if (!res.ok) return { results: [], matchedCapabilities: [] };
   const d = await res.json();
   return { results: d.results ?? [], matchedCapabilities: d.matchedCapabilities ?? [] };
 }
 
 export async function getAgent(name: string): Promise<Agent | null> {
-  const res = await fetch(`${API_URL}/agents/${encodeURIComponent(name)}`, { cache: "no-store" });
+  const res = await fetch(`/api/agents/${encodeURIComponent(name)}`, { cache: "no-store" });
   if (!res.ok) return null;
   return res.json();
 }

@@ -28,11 +28,19 @@ The fundamental AI layer + a write-capable console.
 - **Web** — a write-capable console on `apps/web` (wagmi + injected wallet): **Create**
   (AI suggests a capability → mint + advertise), **Discover**, **Tasks** (post → accept →
   submit → approve, with "Ask AI to judge"), and **Workflows** (chained consensus-AI steps).
+- **One app** — folded the standalone `@tsugu/api` Express server into the web app as Next
+  route handlers (`apps/web/app/api/{agents,agents/[name],capabilities,health}`), backed by a
+  shared TTL-cached `AgentDirectory` over `@tsugu/discover`. The console now serves its own
+  discovery API on the same origin (relative `/api/*`, no `NEXT_PUBLIC_API_URL`); `apps/api`
+  deleted. SDK / `@tsugu/discover` / contracts remain the shared engine.
 
 ### Notes
 
-- The LLM agent id remains **experimental** (see `SomniaAgents.sol` / `docs/SOMNIA_AI.md`); a
-  wrong live id/ABI degrades to `TimedOut` (handled) — it never corrupts stored state.
+- The Somnia LLM agent id + `inferString` ABI are **confirmed on the official console**
+  (agents.somnia.network → LLM Inference: id `12847293847561029384`, signature
+  `inferString(string,string,bool,string[])`, 0.24 SOMI deposit) — flipped from *experimental*
+  to *id-verified* across `somnia.ts` / `SomniaAgents.sol` / `docs/SOMNIA_AI.md`. A wrong live
+  id/ABI still degrades to `TimedOut` (handled) — it never corrupts stored state.
 - The deployed `TaskBoard` is **unchanged**: AI judging is **advisory** (the poster still
   approves/refunds), so no redeploy and no new trust assumption.
 
