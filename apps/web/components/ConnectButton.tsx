@@ -1,7 +1,7 @@
 "use client";
 
 import { useAccount, useConnect, useDisconnect, useSwitchChain } from "wagmi";
-import { shannon } from "@asom/sdk";
+import { shannon } from "@tsugu/sdk";
 import { shortAddr } from "@/lib/vault";
 
 export function ConnectButton() {

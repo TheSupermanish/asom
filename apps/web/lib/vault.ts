@@ -11,7 +11,7 @@ import {
   type ClaimType,
   type PactStatus,
   type CheckStatus,
-} from "@asom/sdk";
+} from "@tsugu/sdk";
 
 export { vaultAbi };
 export type { PactKind, ClaimType, PactStatus, CheckStatus };

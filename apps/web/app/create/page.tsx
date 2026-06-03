@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { parseEther, parseEventLogs } from "viem";
 import { useAccount, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
-import { PACT_KINDS, CLAIM_TYPES, shannon } from "@asom/sdk";
+import { PACT_KINDS, CLAIM_TYPES, shannon } from "@tsugu/sdk";
 import { vaultAbi, vaultAddress, GAS, KIND_META, CLAIM_META, type ClaimType } from "@/lib/vault";
 import { ConnectButton } from "@/components/ConnectButton";
 import { Seam } from "@/components/ui";

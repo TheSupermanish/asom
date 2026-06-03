@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { parseEther, zeroAddress } from "viem";
 import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
-import { shannon } from "@asom/sdk";
+import { shannon } from "@tsugu/sdk";
 import {
   vaultAbi,
   vaultAddress,

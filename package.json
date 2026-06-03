@@ -12,8 +12,8 @@
     "build": "turbo run build",
     "test": "turbo run test",
     "lint": "turbo run lint",
-    "contracts:build": "pnpm --filter @asom/contracts build",
-    "contracts:test": "pnpm --filter @asom/contracts test"
+    "contracts:build": "pnpm --filter @tsugu/contracts build",
+    "contracts:test": "pnpm --filter @tsugu/contracts test"
   },
   "devDependencies": {
     "turbo": "^2.1.0"

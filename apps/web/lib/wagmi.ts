@@ -1,6 +1,6 @@
 import { http, createConfig } from "wagmi";
 import { injected } from "wagmi/connectors";
-import { shannon } from "@asom/sdk";
+import { shannon } from "@tsugu/sdk";
 
 /** Public RPC used for reads (overridable for a private/rate-limited endpoint). */
 export const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL ?? "https://dream-rpc.somnia.network";

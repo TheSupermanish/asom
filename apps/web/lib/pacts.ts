@@ -1,5 +1,5 @@
 import { createPublicClient, http } from "viem";
-import { shannon } from "@asom/sdk";
+import { shannon } from "@tsugu/sdk";
 import { vaultAbi, vaultAddress, type Pact } from "./vault";
 
 const RPC = process.env.SHANNON_RPC_URL ?? process.env.NEXT_PUBLIC_RPC_URL ?? "https://dream-rpc.somnia.network";
