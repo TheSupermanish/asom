@@ -1,19 +1,11 @@
 {
   "name": "@tsugu/sdk",
   "version": "0.1.0",
-  "description": "TypeScript SDK for tsugu — create, resolve, and operate agents on Somnia",
+  "private": true,
+  "description": "TypeScript SDK for Tsugu — read and write AI-verified escrow Pacts on Somnia",
   "license": "MIT",
   "author": "Wono Labs",
-  "homepage": "https://github.com/TheSupermanish/tsugu#readme",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/TheSupermanish/tsugu.git",
-    "directory": "packages/sdk"
-  },
-  "bugs": {
-    "url": "https://github.com/TheSupermanish/tsugu/issues"
-  },
-  "keywords": ["somnia", "erc-6551", "agents", "web3", "viem", "tsugu"],
+  "keywords": ["somnia", "escrow", "tsugu", "web3", "viem", "ai"],
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -28,16 +20,12 @@
     }
   },
   "files": ["dist", "README.md"],
-  "publishConfig": {
-    "access": "public"
-  },
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",
     "dev": "tsup src/index.ts --format esm --dts --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "prepublishOnly": "pnpm run build"
+    "test:watch": "vitest"
   },
   "peerDependencies": {
     "viem": ">=2.21.0 <3"
